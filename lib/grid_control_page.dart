@@ -9,6 +9,7 @@ import 'services/session_service.dart';
 import 'services/route_service.dart';
 import 'services/websocket_service.dart';
 import 'services/mqtt_device_service.dart';
+import 'services/database_telemetry_service.dart';
 import 'core/api_exception.dart';
 
 class GridControlPage extends StatefulWidget {
@@ -68,6 +69,7 @@ class _GridControlPageState extends State<GridControlPage> {
   final _routeService = RouteService();
   final _wsService = WebSocketService.instance;
   final _mqttDevice = MqttDeviceService.instance;
+  final _dbTelemetry = DatabaseTelemetryService.instance;
 
   // flutter_map controller
   final MapController _mapController = MapController();
@@ -75,7 +77,11 @@ class _GridControlPageState extends State<GridControlPage> {
 
   StreamSubscription<bool>? _mqttRunningSub;
   StreamSubscription<WsConnectionState>? _wsStateSub;
-  StreamSubscription<Map<String, dynamic>>? _navEventSub;
+  Timer? _routeAckTimer;
+  bool _waitingRouteAck = false;
+  int _lastRouteSeq = 0;
+  bool _routeSeqInitialized = false;
+  bool _hasCenteredMap = false;
 
   @override
   void initState() {
@@ -96,16 +102,16 @@ class _GridControlPageState extends State<GridControlPage> {
     });
 
     // Listen telemetri Arduino — update posisi kapal di peta
-    _mqttDevice.telemetryNotifier.addListener(_onTelemetryUpdate);
-
-    // Listen navigation events dari Arduino v14.8
-    _navEventSub = _mqttDevice.navEventStream.listen(_onNavEvent);
+    _dbTelemetry.telemetryNotifier.addListener(_onTelemetryUpdate);
 
     _initServices();
   }
 
   /// Hanya buka session & connect jika belum aktif
   Future<void> _initServices() async {
+    const deviceId = 'cfead5c1-4e4e-42da-af88-70620b8e3eac';
+    _dbTelemetry.start(deviceId: deviceId);
+
     if (_mqttDevice.isRunning && _wsService.state == WsConnectionState.connected) {
       debugPrint('[GRID] Services sudah aktif — skip reconnect');
       _onTelemetryUpdate();
@@ -130,73 +136,112 @@ class _GridControlPageState extends State<GridControlPage> {
 
   void _onTelemetryUpdate() {
     if (!mounted) return;
-    final lat = _mqttDevice.arduinoLat;
-    final lng = _mqttDevice.arduinoLng;
+    final lat = _dbTelemetry.arduinoLat;
+    final lng = _dbTelemetry.arduinoLng;
     final hasValidLocation = lat != 0.0 || lng != 0.0;
     final newLatLng = hasValidLocation ? LatLng(lat, lng) : _shipLatLng;
     final shouldCenterMap =
-        !_locationLoaded && _mqttDevice.locationLoaded && hasValidLocation;
+        !_locationLoaded && _dbTelemetry.locationLoaded && hasValidLocation;
 
     setState(() {
       _shipLatLng      = newLatLng;
-      _shipSpeed       = _mqttDevice.arduinoSpeed;
-      _shipBearing     = _mqttDevice.arduinoBearing;
-      _locationLoaded  = _mqttDevice.locationLoaded;
+      _shipSpeed       = _dbTelemetry.arduinoSpeed;
+      _shipBearing     = _dbTelemetry.arduinoBearing;
+      _locationLoaded  = _dbTelemetry.locationLoaded;
 
       // Telemetri tambahan v14.5-S3
-      _deviceMode      = _mqttDevice.deviceMode;
-      _motorSpeed      = _mqttDevice.motorSpeed;
-      _waypointIndex   = _mqttDevice.waypointIndex;
-      _autopilotActive = _mqttDevice.autopilotActive;
-      _smartMoveActive = _mqttDevice.smartMoveActive;
-      _obstacleLeft    = _mqttDevice.obstacleLeft;
-      _obstacleRight   = _mqttDevice.obstacleRight;
-      _gpsQuality      = _mqttDevice.gpsQuality;
-      _hdop            = _mqttDevice.arduinoHdop;
-      _satelliteCount  = _mqttDevice.satelliteCount;
-      _gpsFix          = _mqttDevice.gpsFix;
-      _lastHeading     = _mqttDevice.lastHeading;
+      _deviceMode      = _dbTelemetry.deviceMode;
+      _motorSpeed      = _dbTelemetry.motorSpeed;
+      _waypointIndex   = _dbTelemetry.waypointIndex;
+      _autopilotActive = _dbTelemetry.autopilotActive;
+      _smartMoveActive = _dbTelemetry.smartMoveActive;
+      _obstacleLeft    = _dbTelemetry.obstacleLeft;
+      _obstacleRight   = _dbTelemetry.obstacleRight;
+      _gpsQuality      = _dbTelemetry.gpsQuality;
+      _hdop            = _dbTelemetry.arduinoHdop;
+      _satelliteCount  = _dbTelemetry.satelliteCount;
+      _gpsFix          = _dbTelemetry.gpsFix;
+      _lastHeading     = _dbTelemetry.lastHeading;
 
       // Telemetri baru v14.8-S3 (Navigation Grid)
-      _waypointCount   = _mqttDevice.waypointCount;
-      _headingValid    = _mqttDevice.headingValid;
-      _motorDisabled   = _mqttDevice.motorDisabled;
+      _waypointCount   = _dbTelemetry.waypointCount;
+      _headingValid    = _dbTelemetry.headingValid;
+      _motorDisabled   = _dbTelemetry.motorDisabled;
 
-      _xte             = _mqttDevice.xte;
-      _arrivalRadius   = _mqttDevice.arrivalRadius;
-      _wpElapsedS      = _mqttDevice.wpElapsedS;
-      _wpTimeoutS      = _mqttDevice.wpTimeoutS;
-      _wpDistM         = _mqttDevice.wpDistM;
+      _xte             = _dbTelemetry.xte;
+      _arrivalRadius   = _dbTelemetry.arrivalRadius;
+      _wpElapsedS      = _dbTelemetry.wpElapsedS;
+      _wpTimeoutS      = _dbTelemetry.wpTimeoutS;
+      _wpDistM         = _dbTelemetry.wpDistM;
 
       // Telemetri baru v15.0-S3 (GSM + M8U Sensor Fusion)
-      _gsmConnected   = _mqttDevice.gsmConnected;
-      _signalQuality  = _mqttDevice.signalQuality;
-      _drHeading      = _mqttDevice.drHeading;
-      _drHeadingAcc   = _mqttDevice.drHeadingAcc;
-      _drValid        = _mqttDevice.drValid;
-      _fusionMode     = _mqttDevice.fusionMode;
+      _gsmConnected   = _dbTelemetry.gsmConnected;
+      _signalQuality  = _dbTelemetry.signalQuality;
+      _drHeading      = _dbTelemetry.drHeading;
+      _drHeadingAcc   = _dbTelemetry.drHeadingAcc;
+      _drValid        = _dbTelemetry.drValid;
+      _fusionMode     = _dbTelemetry.fusionMode;
 
       // Sinkronkan status executing dengan autopilot Arduino
       if (_autopilotActive && !isExecuting) {
+        _clearRouteAckWait();
         isExecuting = true;
-      } else if (!_autopilotActive && isExecuting && _deviceMode != 'auto') {
+      } else if (!_waitingRouteAck &&
+          !_autopilotActive &&
+          isExecuting &&
+          _deviceMode != 'auto') {
         isExecuting = false;
       }
     });
 
-    // Hanya geser kamera saat pertama kali dapat GPS dari Arduino
-    if (shouldCenterMap) {
-      _mapController.move(newLatLng, 16.0);
+    // Hanya geser kamera saat pertama kali dapat GPS dari Arduino.
+    if (shouldCenterMap && !_hasCenteredMap) {
+      _hasCenteredMap = true;
+      _moveMapSafely(newLatLng, 16.0);
     }
+
+    _handleRouteStatusUpdate();
   }
 
-  /// Handle navigation events dari Arduino v14.8 (wp_reached, wp_timeout, dll)
-  void _onNavEvent(Map<String, dynamic> data) {
+  void _moveMapSafely(LatLng center, double zoom) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        _mapController.move(center, zoom);
+      } catch (e) {
+        debugPrint('[GRID] Map move skipped: $e');
+      }
+    });
+  }
+
+  void _handleRouteStatusUpdate() {
     if (!mounted) return;
-    final event = (data['event'] ?? '').toString();
-    final wpIdx = data['wp_index'] ?? 0;
-    final wpTotal = data['wp_total'] ?? 0;
-    final dist = (data['dist_m'] ?? 0.0).toDouble();
+    final routeSeq = _dbTelemetry.routeSeq;
+    if (!_routeSeqInitialized) {
+      _lastRouteSeq = routeSeq;
+      _routeSeqInitialized = true;
+      return;
+    }
+    if (routeSeq == _lastRouteSeq) return;
+    _lastRouteSeq = routeSeq;
+
+    _handleRouteEvent(
+      event: _dbTelemetry.routeEvent,
+      reason: _dbTelemetry.routeReason,
+      wpIdx: _dbTelemetry.routeWpIndex,
+      wpTotal: _dbTelemetry.routeWpTotal,
+      dist: _dbTelemetry.routeDistM,
+    );
+  }
+
+  void _handleRouteEvent({
+    required String event,
+    required String reason,
+    required int wpIdx,
+    required int wpTotal,
+    required double dist,
+  }) {
+    if (!mounted || event == 'none') return;
 
     String message;
     Color bgColor;
@@ -214,17 +259,28 @@ class _GridControlPageState extends State<GridControlPage> {
         icon = Icons.timer_off;
         break;
       case 'route_complete':
+        _clearRouteAckWait();
         message = 'Rute selesai! Semua $wpTotal waypoint tercapai.';
         bgColor = const Color(0xFF10B981);
         icon = Icons.flag;
         setState(() => isExecuting = false);
         break;
       case 'route_start':
+        _clearRouteAckWait();
         message = 'Rute dimulai: $wpTotal waypoint';
         bgColor = const Color(0xFF06B6D4);
         icon = Icons.play_arrow;
+        setState(() => isExecuting = true);
+        break;
+      case 'route_reject':
+        _clearRouteAckWait();
+        message = _routeRejectMessage(reason);
+        bgColor = const Color(0xFFEF4444);
+        icon = Icons.error_outline;
+        setState(() => isExecuting = false);
         break;
       case 'route_stop':
+        _clearRouteAckWait();
         message = 'Rute dihentikan';
         bgColor = const Color(0xFFEF4444);
         icon = Icons.stop;
@@ -251,12 +307,30 @@ class _GridControlPageState extends State<GridControlPage> {
     );
   }
 
+  String _routeRejectMessage(String reason) {
+    switch (reason) {
+      case 'gps_not_locked':
+        return 'Route ditolak: GPS firmware belum lock.';
+      case 'invalid_waypoints':
+        return 'Route ditolak: format waypoint tidak valid.';
+      case 'waypoints_less_than_2':
+        return 'Route ditolak: minimal 2 waypoint.';
+      case 'invalid_coordinate':
+        return 'Route ditolak: koordinat waypoint tidak valid.';
+      case 'unknown_action':
+        return 'Route ditolak: command tidak dikenal.';
+      default:
+        return 'Route ditolak Arduino${reason.isEmpty ? '' : ': $reason'}';
+    }
+  }
+
   Future<void> _openSessionAndConnect() async {
     try {
       const deviceId = 'cfead5c1-4e4e-42da-af88-70620b8e3eac';
       final session = await _sessionService.openSession(deviceId);
       debugPrint('✅ Session: ${session.sessionId}');
       await _wsService.connect();
+      _dbTelemetry.start(deviceId: deviceId);
       _mqttDevice.startAsync();
     } on ApiException catch (e) {
       if (mounted) {
@@ -283,10 +357,10 @@ class _GridControlPageState extends State<GridControlPage> {
 
   @override
   void dispose() {
-    _mqttDevice.telemetryNotifier.removeListener(_onTelemetryUpdate);
+    _dbTelemetry.telemetryNotifier.removeListener(_onTelemetryUpdate);
     _mqttRunningSub?.cancel();
     _wsStateSub?.cancel();
-    _navEventSub?.cancel();
+    _routeAckTimer?.cancel();
     // JANGAN disconnect/dispose services di sini!
     // Services adalah singleton — tetap hidup saat pindah halaman.
     // Hanya di-teardown saat logout (lihat _showLogoutDialog).
@@ -302,9 +376,39 @@ class _GridControlPageState extends State<GridControlPage> {
   }
 
   void _clearAllWaypoints() {
+    _clearRouteAckWait();
     setState(() {
       waypoints.clear();
       isExecuting = false;
+    });
+  }
+
+  void _clearRouteAckWait() {
+    _routeAckTimer?.cancel();
+    _routeAckTimer = null;
+    _waitingRouteAck = false;
+  }
+
+  void _startRouteAckTimer() {
+    _clearRouteAckWait();
+    _waitingRouteAck = true;
+    _lastRouteSeq = _dbTelemetry.routeSeq;
+    _routeSeqInitialized = true;
+    _routeAckTimer = Timer(const Duration(seconds: 7), () {
+      if (!mounted || !_waitingRouteAck || _autopilotActive) return;
+      setState(() {
+        _waitingRouteAck = false;
+        isExecuting = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Route tidak dikonfirmasi Arduino. Cek MQTT/GPS firmware.',
+          ),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 4),
+        ),
+      );
     });
   }
 
@@ -318,10 +422,10 @@ class _GridControlPageState extends State<GridControlPage> {
       );
       return;
     }
-    if (!_mqttDevice.isRunning) {
+    if (!_dbTelemetry.isRunning) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('MQTT belum terhubung ke kapal.'),
+          content: Text('Database telemetry belum terhubung.'),
           backgroundColor: Colors.red,
         ),
       );
@@ -341,74 +445,92 @@ class _GridControlPageState extends State<GridControlPage> {
       return;
     }
     setState(() => isExecuting = true);
-
-    // ✅ HYBRID APPROACH: Kirim ke MQTT (fast path) + Backend (logging)
-    
-    // 1. Kirim langsung ke MQTT untuk responsiveness
-    _sendRouteToMqtt();
-    
-    // 2. Kirim ke backend untuk logging (async, tidak blocking)
-    _sendRouteToBackend();
-  }
-
-  /// Kirim route langsung ke Arduino via MQTT (fast path)
-  void _sendRouteToMqtt() {
     try {
-      final payload = {
-        'action': 'start',
-        'waypoints': waypoints.map((w) => {
-          'lat': w.latitude,
-          'lng': w.longitude,
-        }).toList(),
-      };
-      
-      _mqttDevice.publishRoute(payload);
-      
+      await _startRouteViaBackend();
+      _startRouteAckTimer();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Route dikirim ke kapal!'),
+            content: Text(
+              'Route dikirim via backend. Menunggu konfirmasi Arduino...',
+            ),
             backgroundColor: Colors.green,
             duration: Duration(seconds: 2),
           ),
         );
       }
     } catch (e) {
-      debugPrint('[GRID] MQTT route send error: $e');
-      // Tidak throw error, biarkan backend fallback
+      _clearRouteAckWait();
+      if (mounted) {
+        setState(() => isExecuting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal start route: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
     }
   }
 
-  /// Kirim route ke backend untuk logging (async, tidak blocking)
-  Future<void> _sendRouteToBackend() async {
-    try {
-      const deviceId = 'cfead5c1-4e4e-42da-af88-70620b8e3eac';
-      final route = await _routeService.createRoute(
-        deviceId: deviceId,
-        name: 'Route ${DateTime.now().millisecondsSinceEpoch}',
-        waypoints: waypoints
-            .map((w) => Waypoint(lat: w.latitude, lng: w.longitude))
-            .toList(),
-      );
-      await _routeService.startRoute(route.id);
-      _activeRouteId = route.id;
-      debugPrint('[GRID] ✅ Route logged to backend: ${route.id}');
-    } on ApiException catch (e) {
-      debugPrint('[GRID] ⚠️ Backend error (ignored, Arduino already received via MQTT): ${e.message}');
-      // Backend error tidak masalah, Arduino sudah terima via MQTT
-    } catch (e) {
-      debugPrint('[GRID] ⚠️ Backend error (ignored): $e');
-      // Tidak throw error, Arduino sudah terima via MQTT
+  Future<void> _startRouteViaBackend() async {
+    const deviceId = 'cfead5c1-4e4e-42da-af88-70620b8e3eac';
+    await _stopActiveBackendRoutes(deviceId);
+
+    final routeWaypoints = waypoints
+        .map((w) => Waypoint(lat: w.latitude, lng: w.longitude))
+        .toList();
+
+    debugPrint(
+      '[GRID] Creating backend route with ${routeWaypoints.length} waypoint',
+    );
+    final route = await _routeService.createRoute(
+      deviceId: deviceId,
+      name: 'Route ${DateTime.now().millisecondsSinceEpoch}',
+      waypoints: routeWaypoints,
+    );
+    debugPrint('[GRID] Backend draft route created: ${route.id}');
+
+    final startedRoute = await _routeService.startRoute(route.id);
+    _activeRouteId = startedRoute.id;
+    debugPrint(
+      '[GRID] Backend route started: ${startedRoute.id} status=${startedRoute.status.name}',
+    );
+  }
+
+  Future<void> _stopActiveBackendRoutes(String deviceId) async {
+    final activeRoutes = await _routeService.listRoutes(
+      deviceId: deviceId,
+      status: RouteStatus.active,
+    );
+    if (activeRoutes.isEmpty) return;
+
+    debugPrint('[GRID] Stopping ${activeRoutes.length} active backend route(s)');
+    for (final route in activeRoutes) {
+      try {
+        await _routeService.stopRoute(route.id);
+        debugPrint('[GRID] Backend route stopped: ${route.id}');
+      } catch (e) {
+        debugPrint('[GRID] Failed to stop active backend route ${route.id}: $e');
+        rethrow;
+      }
     }
   }
 
   Future<void> _stopRoute() async {
-    _mqttDevice.publishRoute({'action': 'stop'});
-    if (_activeRouteId != null) {
-      try {
+    _clearRouteAckWait();
+    const deviceId = 'cfead5c1-4e4e-42da-af88-70620b8e3eac';
+    try {
+      if (_activeRouteId != null) {
         await _routeService.stopRoute(_activeRouteId!);
-      } catch (_) {}
-      _activeRouteId = null;
+        debugPrint('[GRID] Backend route stopped: $_activeRouteId');
+        _activeRouteId = null;
+      } else {
+        await _stopActiveBackendRoutes(deviceId);
+      }
+    } catch (e) {
+      debugPrint('[GRID] Backend stop route error: $e');
     }
     setState(() {
       isExecuting = false;
@@ -868,7 +990,7 @@ class _GridControlPageState extends State<GridControlPage> {
                       Colors.red,
                     ),
                   ],
-                  if (_mqttDevice.isRunning && !_gpsFix) ...[
+                  if (_dbTelemetry.isRunning && !_gpsFix) ...[
                     const SizedBox(height: 4),
                     _buildWarningChip(
                       Icons.satellite_alt,
@@ -918,7 +1040,7 @@ class _GridControlPageState extends State<GridControlPage> {
                       Colors.red,
                     ),
                   ],
-                  if (_mqttDevice.isRunning && !_gsmConnected) ...[
+                  if (_dbTelemetry.isRunning && !_gsmConnected) ...[
                     const SizedBox(height: 4),
                     _buildWarningChip(
                       Icons.signal_cellular_off,
@@ -1099,7 +1221,7 @@ class _GridControlPageState extends State<GridControlPage> {
 
   /// Status GPS deskriptif berdasarkan kondisi aktual
   String get _gpsStatusLabel {
-    if (!_mqttDevice.isRunning) return 'MQTT OFFLINE';
+    if (!_dbTelemetry.isRunning) return 'DB OFFLINE';
     if (!_gpsFix) return 'NO FIX';
     if (_gpsQuality >= 3) return 'GOOD';
     if (_gpsQuality >= 2) return 'FAIR';
@@ -1107,7 +1229,7 @@ class _GridControlPageState extends State<GridControlPage> {
   }
 
   Color get _gpsStatusColor {
-    if (!_mqttDevice.isRunning) return Colors.red;
+    if (!_dbTelemetry.isRunning) return Colors.red;
     if (!_gpsFix) return Colors.orange;
     if (_gpsQuality >= 3) return Colors.green;
     if (_gpsQuality >= 2) return Colors.yellow;
@@ -1449,7 +1571,7 @@ class _GridControlPageState extends State<GridControlPage> {
 
   /// Label GPS deskriptif berdasarkan kondisi
   String _buildGpsLabel() {
-    if (!_mqttDevice.isRunning) return 'MQTT OFFLINE';
+    if (!_dbTelemetry.isRunning) return 'DB OFFLINE';
     if (!_gpsFix && _satelliteCount > 0) {
       return 'GPS TERDETEKSI  ${_satelliteCount}sat  MENUNGGU FIX';
     }
@@ -1492,14 +1614,17 @@ class _GridControlPageState extends State<GridControlPage> {
   Widget _buildControlPanel() {
     final canExecuteRoute = waypoints.length >= 2 &&
         !isExecuting &&
-        _mqttDevice.isRunning &&
+        _dbTelemetry.isRunning &&
         _gpsFix &&
         _locationLoaded;
 
     // Tentukan status label berdasarkan telemetri Arduino
     String statusLabel;
     Color statusColor;
-    if (_autopilotActive) {
+    if (_waitingRouteAck) {
+      statusLabel = 'WAIT ACK';
+      statusColor = const Color(0xFF06B6D4);
+    } else if (_autopilotActive) {
       if (_smartMoveActive) {
         statusLabel = 'AVOIDING';
         statusColor = const Color(0xFFEF4444);

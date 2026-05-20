@@ -5,6 +5,7 @@ import 'grid_control_page.dart';
 import 'services/session_service.dart';
 import 'services/websocket_service.dart';
 import 'services/mqtt_device_service.dart';
+import 'services/database_telemetry_service.dart';
 import 'core/api_exception.dart';
 
 class ShipControllerPage extends StatefulWidget {
@@ -42,6 +43,7 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
   final _sessionService = SessionService.instance;
   final _wsService = WebSocketService.instance;
   final _mqttDevice = MqttDeviceService.instance;
+  final _dbTelemetry = DatabaseTelemetryService.instance;
 
   StreamSubscription<WsConnectionState>? _wsStateSub;
 
@@ -54,8 +56,8 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
     });
     // Sinkronkan state awal WebSocket
     isConnected = _wsService.state == WsConnectionState.connected;
-    // Terima telemetri GPS dari Arduino via MQTT (menggunakan telemetryNotifier)
-    _mqttDevice.telemetryNotifier.addListener(_onTelemetryUpdate);
+    // Terima GPS/status terbaru dari database telemetry backend.
+    _dbTelemetry.telemetryNotifier.addListener(_onTelemetryUpdate);
   }
 
   /// ✅ SIMPLIFIKASI TOTAL - Langsung buka session & connect!
@@ -66,25 +68,25 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
 
   void _onTelemetryUpdate() {
     if (!mounted) return;
-    final lat = _mqttDevice.arduinoLat;
-    final lng = _mqttDevice.arduinoLng;
+    final lat = _dbTelemetry.arduinoLat;
+    final lng = _dbTelemetry.arduinoLng;
     final hasValidLocation = lat != 0.0 || lng != 0.0;
     setState(() {
       if (hasValidLocation) {
         latitude     = lat;
         longitude    = lng;
       }
-      speed          = _mqttDevice.arduinoSpeed;
-      heading        = _mqttDevice.lastHeading.round();
-      satellites     = _mqttDevice.satelliteCount;
-      _gpsFixed      = _mqttDevice.gpsFix;
-      _gpsQuality    = _mqttDevice.gpsQuality;
-      _hdop          = _mqttDevice.arduinoHdop;
-      _obstacleLeft  = _mqttDevice.obstacleLeft;
-      _obstacleRight = _mqttDevice.obstacleRight;
-      _gsmConnected  = _mqttDevice.gsmConnected;
-      _signalQuality = _mqttDevice.signalQuality;
-      _fusionMode    = _mqttDevice.fusionMode;
+      speed          = _dbTelemetry.arduinoSpeed;
+      heading        = _dbTelemetry.lastHeading.round();
+      satellites     = _dbTelemetry.satelliteCount;
+      _gpsFixed      = _dbTelemetry.gpsFix;
+      _gpsQuality    = _dbTelemetry.gpsQuality;
+      _hdop          = _dbTelemetry.arduinoHdop;
+      _obstacleLeft  = _dbTelemetry.obstacleLeft;
+      _obstacleRight = _dbTelemetry.obstacleRight;
+      _gsmConnected  = _dbTelemetry.gsmConnected;
+      _signalQuality = _dbTelemetry.signalQuality;
+      _fusionMode    = _dbTelemetry.fusionMode;
     });
   }
 
@@ -99,7 +101,10 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
       await _wsService.connect();
       debugPrint('[MANUAL] 4. ✅ WebSocket connect selesai (cek state)');
       
-      debugPrint('[MANUAL] 5. Starting MQTT...');
+      debugPrint('[MANUAL] 5. Starting database telemetry...');
+      _dbTelemetry.start(deviceId: deviceId);
+
+      debugPrint('[MANUAL] 6. Starting MQTT control path...');
       _mqttDevice.startAsync();
       debugPrint('[MANUAL] 6. ✅ Semua service started!');
     } on ApiException catch (e) {
@@ -124,7 +129,7 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
 
   @override
   void dispose() {
-    _mqttDevice.telemetryNotifier.removeListener(_onTelemetryUpdate);
+    _dbTelemetry.telemetryNotifier.removeListener(_onTelemetryUpdate);
     _wsStateSub?.cancel();
     // JANGAN disconnect/dispose services di sini!
     // Services adalah singleton — tetap hidup saat pindah halaman.
@@ -297,7 +302,7 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
                   Container(
                     width: 7, height: 7,
                     decoration: BoxDecoration(
-                      color: !_mqttDevice.isRunning ? Colors.red
+                      color: !_dbTelemetry.isRunning ? Colors.red
                            : _gpsQuality >= 3 ? Colors.green
                            : _gpsQuality >= 2 ? Colors.yellow
                            : Colors.orange,
@@ -306,11 +311,11 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    !_mqttDevice.isRunning ? 'OFFLINE'
+                    !_dbTelemetry.isRunning ? 'DB OFFLINE'
                     : !_gpsFixed ? 'NO FIX'
                     : '$satellites SAT Q$_gpsQuality',
                     style: TextStyle(
-                      color: !_mqttDevice.isRunning ? Colors.red
+                      color: !_dbTelemetry.isRunning ? Colors.red
                            : _gpsFixed ? Colors.green : Colors.orange,
                       fontSize: 10, fontWeight: FontWeight.bold,
                     ),

@@ -48,6 +48,31 @@ class SpediRoute {
 class RouteService {
   final _client = ApiClient.instance;
 
+  SpediRoute _routeFromResponse(Map<String, dynamic> data) {
+    final routeData = data['data'];
+    if (routeData is Map<String, dynamic>) {
+      return SpediRoute.fromJson(routeData);
+    }
+    return SpediRoute.fromJson(data);
+  }
+
+  Future<List<SpediRoute>> listRoutes({
+    String? deviceId,
+    RouteStatus? status,
+  }) async {
+    final query = Uri(queryParameters: {
+      if (deviceId != null) 'device_id': deviceId,
+      if (status != null) 'status': status.name,
+    }).query;
+    final data = await _client.get(
+      query.isEmpty ? '/routes' : '/routes?$query',
+    );
+    final routes = data['data'] as List? ?? const [];
+    return routes
+        .map((route) => SpediRoute.fromJson(route as Map<String, dynamic>))
+        .toList();
+  }
+
   /// Buat draft route baru. Minimal 2 waypoint diperlukan.
   /// 
   /// Throws [ApiException] 400 jika waypoint < 2.
@@ -66,19 +91,19 @@ class RouteService {
         'waypoints': waypoints.map((w) => w.toJson()).toList(),
       },
     );
-    return SpediRoute.fromJson(data);
+    return _routeFromResponse(data);
   }
 
   /// Dispatch route ke device via MQTT. Status berubah dari draft → active.
   Future<SpediRoute> startRoute(String routeId) async {
     final data = await _client.post('/routes/$routeId/start');
-    return SpediRoute.fromJson(data);
+    return _routeFromResponse(data);
   }
 
   /// Abort route yang sedang berjalan. Device kembali ke idle.
   Future<SpediRoute> stopRoute(String routeId) async {
     final data = await _client.post('/routes/$routeId/stop');
-    return SpediRoute.fromJson(data);
+    return _routeFromResponse(data);
   }
 
   /// Hapus draft route. Hanya bisa jika status masih "draft".

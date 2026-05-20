@@ -16,8 +16,6 @@ class MqttDeviceService {
   static const _username = 'device';
   static const _password = 'spedi2026';
   static const _topicStatus   = 'spedi/vehicle/status';
-  static const _topicNavEvent = 'spedi/vehicle/nav_event';
-  static const _topicVehicleAll = 'spedi/vehicle/#';
 
   /// Client ID unik — mencegah broker kick saat reconnect
   static String _generateClientId() {
@@ -73,10 +71,6 @@ class MqttDeviceService {
   double drHeadingAcc     = 999.0;          // heading accuracy (derajat)
   bool   drValid          = false;          // apakah DR heading valid
   int    fusionMode       = 0;              // 0=init, 1=calib, 2=fused, 3=DR
-
-  // ─── Navigation event stream (dari topic nav_event) ──────────────────────
-  final _navEventController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get navEventStream => _navEventController.stream;
 
   // Notifier untuk update UI secara reaktif
   final ValueNotifier<Map<String, dynamic>> telemetryNotifier =
@@ -185,8 +179,6 @@ class MqttDeviceService {
         _log('[MQTT RX] topic=${msg.topic} payload=$payload');
         if (msg.topic == _topicStatus) {
           _handleTelemetry(payload);
-        } else if (msg.topic == _topicNavEvent) {
-          _handleNavEvent(payload);
         }
       }
     }, onError: (Object error) {
@@ -204,10 +196,6 @@ class MqttDeviceService {
 
     _log('[MQTT] subscribing $_topicStatus');
     client.subscribe(_topicStatus, MqttQos.atLeastOnce);
-    _log('[MQTT] subscribing $_topicNavEvent');
-    client.subscribe(_topicNavEvent, MqttQos.atLeastOnce);
-    _log('[MQTT] subscribing $_topicVehicleAll');
-    client.subscribe(_topicVehicleAll, MqttQos.atLeastOnce);
   }
 
   // ─── Auto-reconnect callbacks ─────────────────────────────────────────────
@@ -251,54 +239,86 @@ class MqttDeviceService {
   void _handleTelemetry(String raw) {
     try {
       final Map<String, dynamic> data = jsonDecode(raw);
+      final lat = _firstValue(data, const ['lat', 'latitude']);
+      final lng = _firstValue(data, const ['lng', 'lon', 'longitude']);
+      final gpsFixRaw = _firstValue(
+        data,
+        const ['gps_fix', 'gps_locked', 'gpsLock', 'fix', 'locked'],
+      );
+      final satelliteRaw = _firstValue(
+        data,
+        const ['satellite_count', 'satellites', 'sat', 'sats'],
+      );
 
       // ── GPS dasar ──────────────────────────────────────────────────────
-      arduinoLat     = (data['lat']              ?? 0.0).toDouble();
-      arduinoLng     = (data['lng']              ?? 0.0).toDouble();
-      arduinoBearing = (data['bearing']          ?? 0.0).toDouble();
-      arduinoSpeed   = (data['speed']            ?? 0.0).toDouble();
-      arduinoHdop    = (data['hdop']             ?? 99.9).toDouble();
-      gpsFix         =  data['gps_fix']          ?? false;
-      gpsQuality     = _toInt(data['gps_quality'],     0);
-      satelliteCount = _toInt(data['satellite_count'], 0);
+      arduinoLat     = _toDouble(lat, 0.0);
+      arduinoLng     = _toDouble(lng, 0.0);
+      arduinoBearing = _toDouble(
+        _firstValue(data, const ['bearing', 'course']),
+        0.0,
+      );
+      arduinoSpeed   = _toDouble(data['speed'], 0.0);
+      arduinoHdop    = _toDouble(data['hdop'], 99.9);
+      gpsFix         = _toBool(gpsFixRaw, false);
+      gpsQuality     = _toInt(data['gps_quality'], 0);
+      satelliteCount = _toInt(satelliteRaw, 0);
 
       // ── Telemetri tambahan v14.5-S3 ───────────────────────────────────
       deviceMode      = (data['mode']              ?? 'idle').toString();
-      motorSpeed      = _toInt(data['motor_speed'],    0);
+      motorSpeed      = _toInt(data['motor_speed'], 0);
       waypointIndex   = _toInt(data['waypoint_index'], 0);
-      autopilotActive =  data['autopilot_active']  ?? false;
-      smartMoveActive =  data['smart_move_active'] ?? false;
-      obstacleLeft    = _toInt(data['obstacle_left'],  400);
+      autopilotActive = _toBool(data['autopilot_active'], false);
+      smartMoveActive = _toBool(data['smart_move_active'], false);
+      obstacleLeft    = _toInt(data['obstacle_left'], 400);
       obstacleRight   = _toInt(data['obstacle_right'], 400);
-      steerIntegral   = (data['steer_integral']    ?? 0.0).toDouble();
-      lastHeading     = (data['last_heading']      ?? 0.0).toDouble();
+      steerIntegral   = _toDouble(data['steer_integral'], 0.0);
+      lastHeading     = _toDouble(data['last_heading'], 0.0);
 
       // ── Telemetri baru v14.8-S3 (Navigation Grid) ────────────────────
-      waypointCount   = _toInt(data['waypoint_count'],  0);
-      headingValid    =  data['heading_valid']     ?? true;
-      motorDisabled   =  data['motor_disabled']    ?? false;
-      uptimeS         = _toInt(data['uptime_s'],        0);
-      xte             = (data['xte']               ?? 0.0).toDouble();
-      arrivalRadius   = (data['arrival_radius']    ?? 3.0).toDouble();
-      wpElapsedS      = _toInt(data['wp_elapsed_s'],    0);
-      wpTimeoutS      = _toInt(data['wp_timeout_s'],  120);
-      wpDistM         = (data['wp_dist_m']         ?? 0.0).toDouble();
+      waypointCount   = _toInt(data['waypoint_count'], 0);
+      headingValid    = _toBool(data['heading_valid'], true);
+      motorDisabled   = _toBool(data['motor_disabled'], false);
+      uptimeS         = _toInt(data['uptime_s'], 0);
+      xte             = _toDouble(data['xte'], 0.0);
+      arrivalRadius   = _toDouble(data['arrival_radius'], 3.0);
+      wpElapsedS      = _toInt(data['wp_elapsed_s'], 0);
+      wpTimeoutS      = _toInt(data['wp_timeout_s'], 120);
+      wpDistM         = _toDouble(data['wp_dist_m'], 0.0);
 
       // ── Telemetri baru v15.0-S3 (GSM + M8U Sensor Fusion) ────────────
-      gsmConnected    =  data['gsm_connected']     ?? false;
-      signalQuality   = _toInt(data['signal_quality'],    0);
-      drHeading       = (data['dr_heading']        ?? 0.0).toDouble();
-      drHeadingAcc    = (data['dr_heading_acc']    ?? 999.0).toDouble();
-      drValid         =  data['dr_valid']          ?? false;
-      fusionMode      = _toInt(data['fusion_mode'],        0);
+      gsmConnected    = _toBool(data['gsm_connected'], false);
+      signalQuality   = _toInt(
+        _firstValue(data, const ['signal_quality', 'gsm_signal', 'signal']),
+        0,
+      );
+      drHeading       = _toDouble(data['dr_heading'], 0.0);
+      drHeadingAcc    = _toDouble(data['dr_heading_acc'], 999.0);
+      drValid         = _toBool(data['dr_valid'], false);
+      fusionMode      = _toInt(data['fusion_mode'], 0);
 
       locationLoaded = gpsFix && (arduinoLat != 0.0 || arduinoLng != 0.0);
 
-      telemetryNotifier.value = Map<String, dynamic>.from(data);
+      final normalizedData = Map<String, dynamic>.from(data)
+        ..['lat'] = arduinoLat
+        ..['lng'] = arduinoLng
+        ..['gps_fix'] = gpsFix
+        ..['satellite_count'] = satelliteCount
+        ..['gps_quality'] = gpsQuality
+        ..['hdop'] = arduinoHdop
+        ..['location_loaded'] = locationLoaded
+        ..['signal_quality'] = signalQuality;
+      telemetryNotifier.value = normalizedData;
       _log('[MQTT GPS] lat=${arduinoLat.toStringAsFixed(5)} '
           'lng=${arduinoLng.toStringAsFixed(5)} '
-          'fix=$gpsFix sat=$satelliteCount '
+          'fix=$gpsFix locationLoaded=$locationLoaded sat=$satelliteCount '
           'hdop=${arduinoHdop.toStringAsFixed(2)} q=$gpsQuality');
+
+      if (gpsFix && !locationLoaded) {
+        _log('[MQTT GPS] GPS fix diterima, tapi koordinat belum valid '
+            '(raw lat=$lat lng=$lng)');
+      } else if (!gpsFix && satelliteCount > 0) {
+        _log('[MQTT GPS] GPS terdeteksi ($satelliteCount sat), menunggu fix');
+      }
 
       _log('📍 Arduino GPS: ${arduinoLat.toStringAsFixed(5)}, '
           '${arduinoLng.toStringAsFixed(5)} | '
@@ -311,25 +331,59 @@ class MqttDeviceService {
     }
   }
 
-  void _handleNavEvent(String raw) {
-    try {
-      final Map<String, dynamic> data = jsonDecode(raw);
-      final event = (data['event'] ?? '').toString();
-      _log('🚩 Nav event: $event | WP:${data['wp_index']} | dist:${data['dist_m']}');
-      if (!_navEventController.isClosed) {
-        _navEventController.add(Map<String, dynamic>.from(data));
-      }
-    } catch (e) {
-      _log('⚠️ Gagal parse nav event: $e');
-    }
-  }
-
   /// Helper: konversi dynamic ke int dengan fallback
   int _toInt(dynamic v, int fallback) {
     if (v == null) return fallback;
     if (v is int) return v;
-    if (v is double) return v.toInt();
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v.trim()) ?? fallback;
     return fallback;
+  }
+
+  double _toDouble(dynamic v, double fallback) {
+    if (v == null) return fallback;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v.trim()) ?? fallback;
+    return fallback;
+  }
+
+  bool _toBool(dynamic v, bool fallback) {
+    if (v == null) return fallback;
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    if (v is String) {
+      switch (v.trim().toLowerCase()) {
+        case '1':
+        case 'true':
+        case 'yes':
+        case 'y':
+        case 'on':
+        case 'fix':
+        case 'fixed':
+        case 'lock':
+        case 'locked':
+          return true;
+        case '0':
+        case 'false':
+        case 'no':
+        case 'n':
+        case 'off':
+        case 'none':
+        case 'nofix':
+        case 'no_fix':
+        case 'unlock':
+        case 'unlocked':
+          return false;
+      }
+    }
+    return fallback;
+  }
+
+  dynamic _firstValue(Map<String, dynamic> data, List<String> keys) {
+    for (final key in keys) {
+      if (data.containsKey(key) && data[key] != null) return data[key];
+    }
+    return null;
   }
 
   /// Kirim joystick command langsung ke Arduino via MQTT
@@ -423,6 +477,5 @@ class MqttDeviceService {
     telemetryNotifier.dispose();
     _statusController.close();
     _runningController.close();
-    _navEventController.close();
   }
 }
