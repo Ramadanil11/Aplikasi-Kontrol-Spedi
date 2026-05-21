@@ -59,6 +59,9 @@ class DatabaseTelemetryService {
   int wpTimeoutS = 120;
   double wpDistM = 0.0;
 
+  bool wifiConnected = false;
+  int wifiSignal = 0;
+  int wifiRssi = 0;
   bool gsmConnected = false;
   int signalQuality = 0;
   double drHeading = 0.0;
@@ -66,8 +69,9 @@ class DatabaseTelemetryService {
   bool drValid = false;
   int fusionMode = 0;
 
-  final ValueNotifier<Map<String, dynamic>> telemetryNotifier =
-      ValueNotifier({});
+  final ValueNotifier<Map<String, dynamic>> telemetryNotifier = ValueNotifier(
+    {},
+  );
 
   void start({required String deviceId}) {
     _disposed = false;
@@ -88,10 +92,9 @@ class DatabaseTelemetryService {
 
     _pollInFlight = true;
     try {
-      final query = Uri(queryParameters: {
-        'device_id': deviceId,
-        'limit': '1',
-      }).query;
+      final query = Uri(
+        queryParameters: {'device_id': deviceId, 'limit': '1'},
+      ).query;
       final response = await _client.get('/telemetry?$query');
       final records = response['data'];
       if (records is! List || records.isEmpty) {
@@ -135,14 +138,19 @@ class DatabaseTelemetryService {
   void _handleTelemetry(Map<String, dynamic> data) {
     final lat = _firstValue(data, const ['lat', 'latitude']);
     final lng = _firstValue(data, const ['lng', 'lon', 'longitude']);
-    final gpsFixRaw = _firstValue(
-      data,
-      const ['gps_fix', 'gps_locked', 'gpsLock', 'fix', 'locked'],
-    );
-    final satelliteRaw = _firstValue(
-      data,
-      const ['satellite_count', 'satellites', 'sat', 'sats'],
-    );
+    final gpsFixRaw = _firstValue(data, const [
+      'gps_fix',
+      'gps_locked',
+      'gpsLock',
+      'fix',
+      'locked',
+    ]);
+    final satelliteRaw = _firstValue(data, const [
+      'satellite_count',
+      'satellites',
+      'sat',
+      'sats',
+    ]);
 
     arduinoLat = _toDouble(lat, 0.0);
     arduinoLng = _toDouble(lng, 0.0);
@@ -185,11 +193,28 @@ class DatabaseTelemetryService {
     wpTimeoutS = _toInt(data['wp_timeout_s'], 120);
     wpDistM = _toDouble(data['wp_dist_m'], 0.0);
 
-    gsmConnected = _toBool(data['gsm_connected'], false);
-    signalQuality = _toInt(
-      _firstValue(data, const ['signal_quality', 'gsm_signal', 'signal']),
+    wifiRssi = _toInt(_firstValue(data, const ['wifi_rssi', 'rssi']), 0);
+    wifiSignal = _toInt(
+      _firstValue(data, const [
+        'wifi_signal',
+        'signal_quality',
+        'wifi_rssi',
+        'rssi',
+      ]),
       0,
     );
+    wifiConnected = _toBool(
+      _firstValue(data, const [
+        'wifi_connected',
+        'wifiConnected',
+        'wifi',
+        'wifi_status',
+      ]),
+      true,
+    );
+    // Backward-compatible aliases for older UI/service callers.
+    gsmConnected = wifiConnected;
+    signalQuality = wifiSignal;
     drHeading = _toDouble(data['dr_heading'], 0.0);
     drHeadingAcc = _toDouble(data['dr_heading_acc'], 999.0);
     drValid = _toBool(
@@ -211,14 +236,19 @@ class DatabaseTelemetryService {
       ..['route_seq'] = routeSeq
       ..['hdop'] = arduinoHdop
       ..['location_loaded'] = locationLoaded
-      ..['signal_quality'] = signalQuality
+      ..['wifi_connected'] = wifiConnected
+      ..['wifi_signal'] = wifiSignal
+      ..['wifi_rssi'] = wifiRssi
+      ..['signal_quality'] = wifiSignal
       ..['recorded_at'] = lastRecordedAt?.toIso8601String();
     telemetryNotifier.value = normalizedData;
 
-    debugPrint('[DB GPS] lat=${arduinoLat.toStringAsFixed(5)} '
-        'lng=${arduinoLng.toStringAsFixed(5)} '
-        'fix=$gpsFix locationLoaded=$locationLoaded sat=$satelliteCount '
-        'hdop=${arduinoHdop.toStringAsFixed(2)} q=$gpsQuality');
+    debugPrint(
+      '[DB GPS] lat=${arduinoLat.toStringAsFixed(5)} '
+      'lng=${arduinoLng.toStringAsFixed(5)} '
+      'fix=$gpsFix locationLoaded=$locationLoaded sat=$satelliteCount '
+      'hdop=${arduinoHdop.toStringAsFixed(2)} q=$gpsQuality',
+    );
   }
 
   void _markOffline(String error) {

@@ -77,6 +77,10 @@
 #define R_EN_PIN        7
 #define L_EN_PIN        15
 
+// Polarity driver motor aktual. Positif tetap berarti maju di aplikasi,
+// route/autopilot, dan telemetry; hanya output RPWM/LPWM yang dibalik di sini.
+#define MOTOR_FORWARD_SIGN (-1)
+
 #define SERVO_PIN       4
 
 #define TRIG_LEFT_PIN   10
@@ -570,12 +574,14 @@ void setMotorRaw(int speed) {
   if (speed > 0 && speed < MIN_DRIVE_SPEED) speed = 0;
   if (speed < 0 && speed > -MIN_DRIVE_SPEED) speed = 0;
 
-  if (speed > 0) {
+  int driverSpeed = speed * MOTOR_FORWARD_SIGN;
+
+  if (driverSpeed > 0) {
     ledcWrite(LPWM_PIN, 0);
-    ledcWrite(RPWM_PIN, (uint32_t)speed);
-  } else if (speed < 0) {
+    ledcWrite(RPWM_PIN, (uint32_t)driverSpeed);
+  } else if (driverSpeed < 0) {
     ledcWrite(RPWM_PIN, 0);
-    ledcWrite(LPWM_PIN, (uint32_t)(-speed));
+    ledcWrite(LPWM_PIN, (uint32_t)(-driverSpeed));
   } else {
     ledcWrite(RPWM_PIN, 0);
     ledcWrite(LPWM_PIN, 0);

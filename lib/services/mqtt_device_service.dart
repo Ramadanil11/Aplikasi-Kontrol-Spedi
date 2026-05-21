@@ -15,7 +15,7 @@ class MqttDeviceService {
   static const _port = 29053;
   static const _username = 'device';
   static const _password = 'spedi2026';
-  static const _topicStatus   = 'spedi/vehicle/status';
+  static const _topicStatus = 'spedi/vehicle/status';
 
   /// Client ID unik — mencegah broker kick saat reconnect
   static String _generateClientId() {
@@ -30,66 +30,72 @@ class MqttDeviceService {
   bool get isRunning => _isRunning;
 
   bool _disposed = false;
+  bool _intentionalStop = false;
 
   // ─── GPS Arduino (dari telemetri MQTT) ────────────────────────────────────
-  double arduinoLat      = 0.0;
-  double arduinoLng      = 0.0;
-  double arduinoBearing  = 0.0;
-  double arduinoSpeed    = 0.0;
-  double arduinoHdop     = 99.9;
-  bool   gpsFix          = false;
-  int    gpsQuality      = 0;
-  int    satelliteCount  = 0;
-  bool   locationLoaded  = false;
+  double arduinoLat = 0.0;
+  double arduinoLng = 0.0;
+  double arduinoBearing = 0.0;
+  double arduinoSpeed = 0.0;
+  double arduinoHdop = 99.9;
+  bool gpsFix = false;
+  int gpsQuality = 0;
+  int satelliteCount = 0;
+  bool locationLoaded = false;
 
   // ─── Telemetri tambahan dari Arduino v14.5-S3 ─────────────────────────────
-  String deviceMode       = 'idle';       // idle | manual | auto
-  int    motorSpeed       = 0;            // -255..255
-  int    waypointIndex    = 0;            // indeks waypoint aktif
-  bool   autopilotActive  = false;        // true saat mode auto berjalan
-  bool   smartMoveActive  = false;        // true saat obstacle avoidance aktif
-  int    obstacleLeft     = 400;          // jarak sonar kiri (cm)
-  int    obstacleRight    = 400;          // jarak sonar kanan (cm)
-  double steerIntegral    = 0.0;          // akumulator PI steering
-  double lastHeading      = 0.0;          // heading terakhir valid (derajat)
+  String deviceMode = 'idle'; // idle | manual | auto
+  int motorSpeed = 0; // -255..255
+  int waypointIndex = 0; // indeks waypoint aktif
+  bool autopilotActive = false; // true saat mode auto berjalan
+  bool smartMoveActive = false; // true saat obstacle avoidance aktif
+  int obstacleLeft = 400; // jarak sonar kiri (cm)
+  int obstacleRight = 400; // jarak sonar kanan (cm)
+  double steerIntegral = 0.0; // akumulator PI steering
+  double lastHeading = 0.0; // heading terakhir valid (derajat)
 
   // ─── Telemetri baru dari Arduino v14.8-S3 (Navigation Grid) ──────────────
-  int    waypointCount    = 0;            // total waypoint menurut Arduino
-  bool   headingValid     = false;        // false jika heading stale >10 detik
-  bool   motorDisabled    = false;        // true setelah emergency stop
-  int    uptimeS          = 0;            // uptime Arduino dalam detik
-  double xte              = 0.0;          // cross-track error (meter)
-  double arrivalRadius    = 3.0;          // dynamic arrival radius (meter)
-  int    wpElapsedS       = 0;            // detik sejak mulai menuju WP aktif
-  int    wpTimeoutS       = 120;          // batas timeout per-WP (detik)
-  double wpDistM          = 0.0;          // jarak ke WP aktif (meter)
+  int waypointCount = 0; // total waypoint menurut Arduino
+  bool headingValid = false; // false jika heading stale >10 detik
+  bool motorDisabled = false; // true setelah emergency stop
+  int uptimeS = 0; // uptime Arduino dalam detik
+  double xte = 0.0; // cross-track error (meter)
+  double arrivalRadius = 3.0; // dynamic arrival radius (meter)
+  int wpElapsedS = 0; // detik sejak mulai menuju WP aktif
+  int wpTimeoutS = 120; // batas timeout per-WP (detik)
+  double wpDistM = 0.0; // jarak ke WP aktif (meter)
 
-  // ─── Telemetri baru dari Arduino v15.0-S3 (GSM + M8U Sensor Fusion) ─────
-  bool   gsmConnected     = false;          // status koneksi GSM 4G
-  int    signalQuality    = 0;              // CSQ signal (0-31)
-  double drHeading        = 0.0;            // heading dari IMU/DR (derajat)
-  double drHeadingAcc     = 999.0;          // heading accuracy (derajat)
-  bool   drValid          = false;          // apakah DR heading valid
-  int    fusionMode       = 0;              // 0=init, 1=calib, 2=fused, 3=DR
+  // Telemetri baru dari Arduino v15.0-S3 (WiFi + M8U Sensor Fusion)
+  bool wifiConnected = false;
+  int wifiSignal = 0;
+  int wifiRssi = 0;
+  bool gsmConnected = false; // alias kompatibilitas lama
+  int signalQuality = 0; // alias kompatibilitas lama
+  double drHeading = 0.0; // heading dari IMU/DR (derajat)
+  double drHeadingAcc = 999.0; // heading accuracy (derajat)
+  bool drValid = false; // apakah DR heading valid
+  int fusionMode = 0; // 0=init, 1=calib, 2=fused, 3=DR
 
   // Notifier untuk update UI secara reaktif
-  final ValueNotifier<Map<String, dynamic>> telemetryNotifier =
-      ValueNotifier({});
+  final ValueNotifier<Map<String, dynamic>> telemetryNotifier = ValueNotifier(
+    {},
+  );
 
-  final _statusController  = StreamController<String>.broadcast();
-  Stream<String> get statusStream  => _statusController.stream;
+  final _statusController = StreamController<String>.broadcast();
+  Stream<String> get statusStream => _statusController.stream;
 
   final _runningController = StreamController<bool>.broadcast();
-  Stream<bool>   get runningStream => _runningController.stream;
+  Stream<bool> get runningStream => _runningController.stream;
 
   // ─── Auto-reconnect state ─────────────────────────────────────────────────
   Timer? _reconnectTimer;
-  int    _reconnectAttempt = 0;
+  int _reconnectAttempt = 0;
   static const _maxReconnectDelay = 30; // detik
 
   /// Dipanggil tanpa await — tidak blocking UI
   void startAsync() {
     _disposed = false;
+    _intentionalStop = false;
     if (_isRunning &&
         _client?.connectionStatus?.state == MqttConnectionState.connected) {
       unawaited(_restoreMqttReceivePath());
@@ -99,14 +105,14 @@ class MqttDeviceService {
   }
 
   Future<void> _doStart() async {
-    if (_isRunning || _disposed) return;
+    if (_isRunning || _disposed || _intentionalStop) return;
 
     final clientId = _generateClientId();
 
     _client = MqttServerClient.withPort(_host, clientId, _port);
     _client!.logging(on: false);
     _client!.keepAlivePeriod = 30;
-    _client!.connectTimeoutPeriod = 15000;  // 15 detik timeout
+    _client!.connectTimeoutPeriod = 15000; // 15 detik timeout
     _client!.onDisconnected = _onDisconnected;
     _client!.onConnected = _onConnected;
     _client!.onSubscribed = (topic) => _log('📡 Subscribed: $topic');
@@ -171,19 +177,23 @@ class MqttDeviceService {
     _mqttUpdatesSub = null;
     if (previousSub != null) await previousSub.cancel();
     _log('[MQTT] installing updates listener');
-    _mqttUpdatesSub = updates.listen((List<MqttReceivedMessage<MqttMessage>> messages) {
-      for (final msg in messages) {
-        final recMess = msg.payload as MqttPublishMessage;
-        final payload = MqttPublishPayload.bytesToStringAsString(
-            recMess.payload.message);
-        _log('[MQTT RX] topic=${msg.topic} payload=$payload');
-        if (msg.topic == _topicStatus) {
-          _handleTelemetry(payload);
+    _mqttUpdatesSub = updates.listen(
+      (List<MqttReceivedMessage<MqttMessage>> messages) {
+        for (final msg in messages) {
+          final recMess = msg.payload as MqttPublishMessage;
+          final payload = MqttPublishPayload.bytesToStringAsString(
+            recMess.payload.message,
+          );
+          _log('[MQTT RX] topic=${msg.topic} payload=$payload');
+          if (msg.topic == _topicStatus) {
+            _handleTelemetry(payload);
+          }
         }
-      }
-    }, onError: (Object error) {
-      _log('[MQTT RX] updates stream error: $error');
-    });
+      },
+      onError: (Object error) {
+        _log('[MQTT RX] updates stream error: $error');
+      },
+    );
   }
 
   void _subscribeTelemetryTopics() {
@@ -221,7 +231,7 @@ class MqttDeviceService {
   /// Fallback reconnect jika koneksi awal gagal total (bukan auto-reconnect).
   /// Exponential backoff: 2s, 4s, 8s, 16s, 30s max.
   void _scheduleReconnect() {
-    if (_disposed) return;
+    if (_disposed || _intentionalStop) return;
     _reconnectTimer?.cancel();
 
     final delay = math.min(
@@ -232,7 +242,7 @@ class MqttDeviceService {
 
     _log('⏳ Reconnect dalam ${delay}s (attempt #$_reconnectAttempt)...');
     _reconnectTimer = Timer(Duration(seconds: delay), () {
-      if (!_disposed) _doStart();
+      if (!_disposed && !_intentionalStop) _doStart();
     });
   }
 
@@ -241,60 +251,81 @@ class MqttDeviceService {
       final Map<String, dynamic> data = jsonDecode(raw);
       final lat = _firstValue(data, const ['lat', 'latitude']);
       final lng = _firstValue(data, const ['lng', 'lon', 'longitude']);
-      final gpsFixRaw = _firstValue(
-        data,
-        const ['gps_fix', 'gps_locked', 'gpsLock', 'fix', 'locked'],
-      );
-      final satelliteRaw = _firstValue(
-        data,
-        const ['satellite_count', 'satellites', 'sat', 'sats'],
-      );
+      final gpsFixRaw = _firstValue(data, const [
+        'gps_fix',
+        'gps_locked',
+        'gpsLock',
+        'fix',
+        'locked',
+      ]);
+      final satelliteRaw = _firstValue(data, const [
+        'satellite_count',
+        'satellites',
+        'sat',
+        'sats',
+      ]);
 
       // ── GPS dasar ──────────────────────────────────────────────────────
-      arduinoLat     = _toDouble(lat, 0.0);
-      arduinoLng     = _toDouble(lng, 0.0);
+      arduinoLat = _toDouble(lat, 0.0);
+      arduinoLng = _toDouble(lng, 0.0);
       arduinoBearing = _toDouble(
         _firstValue(data, const ['bearing', 'course']),
         0.0,
       );
-      arduinoSpeed   = _toDouble(data['speed'], 0.0);
-      arduinoHdop    = _toDouble(data['hdop'], 99.9);
-      gpsFix         = _toBool(gpsFixRaw, false);
-      gpsQuality     = _toInt(data['gps_quality'], 0);
+      arduinoSpeed = _toDouble(data['speed'], 0.0);
+      arduinoHdop = _toDouble(data['hdop'], 99.9);
+      gpsFix = _toBool(gpsFixRaw, false);
+      gpsQuality = _toInt(data['gps_quality'], 0);
       satelliteCount = _toInt(satelliteRaw, 0);
 
       // ── Telemetri tambahan v14.5-S3 ───────────────────────────────────
-      deviceMode      = (data['mode']              ?? 'idle').toString();
-      motorSpeed      = _toInt(data['motor_speed'], 0);
-      waypointIndex   = _toInt(data['waypoint_index'], 0);
+      deviceMode = (data['mode'] ?? 'idle').toString();
+      motorSpeed = _toInt(data['motor_speed'], 0);
+      waypointIndex = _toInt(data['waypoint_index'], 0);
       autopilotActive = _toBool(data['autopilot_active'], false);
       smartMoveActive = _toBool(data['smart_move_active'], false);
-      obstacleLeft    = _toInt(data['obstacle_left'], 400);
-      obstacleRight   = _toInt(data['obstacle_right'], 400);
-      steerIntegral   = _toDouble(data['steer_integral'], 0.0);
-      lastHeading     = _toDouble(data['last_heading'], 0.0);
+      obstacleLeft = _toInt(data['obstacle_left'], 400);
+      obstacleRight = _toInt(data['obstacle_right'], 400);
+      steerIntegral = _toDouble(data['steer_integral'], 0.0);
+      lastHeading = _toDouble(data['last_heading'], 0.0);
 
       // ── Telemetri baru v14.8-S3 (Navigation Grid) ────────────────────
-      waypointCount   = _toInt(data['waypoint_count'], 0);
-      headingValid    = _toBool(data['heading_valid'], true);
-      motorDisabled   = _toBool(data['motor_disabled'], false);
-      uptimeS         = _toInt(data['uptime_s'], 0);
-      xte             = _toDouble(data['xte'], 0.0);
-      arrivalRadius   = _toDouble(data['arrival_radius'], 3.0);
-      wpElapsedS      = _toInt(data['wp_elapsed_s'], 0);
-      wpTimeoutS      = _toInt(data['wp_timeout_s'], 120);
-      wpDistM         = _toDouble(data['wp_dist_m'], 0.0);
+      waypointCount = _toInt(data['waypoint_count'], 0);
+      headingValid = _toBool(data['heading_valid'], true);
+      motorDisabled = _toBool(data['motor_disabled'], false);
+      uptimeS = _toInt(data['uptime_s'], 0);
+      xte = _toDouble(data['xte'], 0.0);
+      arrivalRadius = _toDouble(data['arrival_radius'], 3.0);
+      wpElapsedS = _toInt(data['wp_elapsed_s'], 0);
+      wpTimeoutS = _toInt(data['wp_timeout_s'], 120);
+      wpDistM = _toDouble(data['wp_dist_m'], 0.0);
 
-      // ── Telemetri baru v15.0-S3 (GSM + M8U Sensor Fusion) ────────────
-      gsmConnected    = _toBool(data['gsm_connected'], false);
-      signalQuality   = _toInt(
-        _firstValue(data, const ['signal_quality', 'gsm_signal', 'signal']),
+      // Telemetri baru v15.0-S3 (WiFi + M8U Sensor Fusion)
+      wifiRssi = _toInt(_firstValue(data, const ['wifi_rssi', 'rssi']), 0);
+      wifiSignal = _toInt(
+        _firstValue(data, const [
+          'wifi_signal',
+          'signal_quality',
+          'wifi_rssi',
+          'rssi',
+        ]),
         0,
       );
-      drHeading       = _toDouble(data['dr_heading'], 0.0);
-      drHeadingAcc    = _toDouble(data['dr_heading_acc'], 999.0);
-      drValid         = _toBool(data['dr_valid'], false);
-      fusionMode      = _toInt(data['fusion_mode'], 0);
+      wifiConnected = _toBool(
+        _firstValue(data, const [
+          'wifi_connected',
+          'wifiConnected',
+          'wifi',
+          'wifi_status',
+        ]),
+        _isRunning,
+      );
+      gsmConnected = wifiConnected;
+      signalQuality = wifiSignal;
+      drHeading = _toDouble(data['dr_heading'], 0.0);
+      drHeadingAcc = _toDouble(data['dr_heading_acc'], 999.0);
+      drValid = _toBool(data['dr_valid'], false);
+      fusionMode = _toInt(data['fusion_mode'], 0);
 
       locationLoaded = gpsFix && (arduinoLat != 0.0 || arduinoLng != 0.0);
 
@@ -306,25 +337,34 @@ class MqttDeviceService {
         ..['gps_quality'] = gpsQuality
         ..['hdop'] = arduinoHdop
         ..['location_loaded'] = locationLoaded
-        ..['signal_quality'] = signalQuality;
+        ..['wifi_connected'] = wifiConnected
+        ..['wifi_signal'] = wifiSignal
+        ..['wifi_rssi'] = wifiRssi
+        ..['signal_quality'] = wifiSignal;
       telemetryNotifier.value = normalizedData;
-      _log('[MQTT GPS] lat=${arduinoLat.toStringAsFixed(5)} '
-          'lng=${arduinoLng.toStringAsFixed(5)} '
-          'fix=$gpsFix locationLoaded=$locationLoaded sat=$satelliteCount '
-          'hdop=${arduinoHdop.toStringAsFixed(2)} q=$gpsQuality');
+      _log(
+        '[MQTT GPS] lat=${arduinoLat.toStringAsFixed(5)} '
+        'lng=${arduinoLng.toStringAsFixed(5)} '
+        'fix=$gpsFix locationLoaded=$locationLoaded sat=$satelliteCount '
+        'hdop=${arduinoHdop.toStringAsFixed(2)} q=$gpsQuality',
+      );
 
       if (gpsFix && !locationLoaded) {
-        _log('[MQTT GPS] GPS fix diterima, tapi koordinat belum valid '
-            '(raw lat=$lat lng=$lng)');
+        _log(
+          '[MQTT GPS] GPS fix diterima, tapi koordinat belum valid '
+          '(raw lat=$lat lng=$lng)',
+        );
       } else if (!gpsFix && satelliteCount > 0) {
         _log('[MQTT GPS] GPS terdeteksi ($satelliteCount sat), menunggu fix');
       }
 
-      _log('📍 Arduino GPS: ${arduinoLat.toStringAsFixed(5)}, '
-          '${arduinoLng.toStringAsFixed(5)} | '
-          'spd: ${arduinoSpeed.toStringAsFixed(1)} km/h | '
-          'sat: $satelliteCount | fix: $gpsFix | '
-          'mode: $deviceMode');
+      _log(
+        '📍 Arduino GPS: ${arduinoLat.toStringAsFixed(5)}, '
+        '${arduinoLng.toStringAsFixed(5)} | '
+        'spd: ${arduinoSpeed.toStringAsFixed(1)} km/h | '
+        'sat: $satelliteCount | fix: $gpsFix | '
+        'mode: $deviceMode',
+      );
     } catch (e) {
       _log('[MQTT RX] raw telemetry parse failed: $raw');
       _log('⚠️ Gagal parse telemetri: $e');
@@ -388,7 +428,8 @@ class MqttDeviceService {
 
   /// Kirim joystick command langsung ke Arduino via MQTT
   void sendJoystick(int throttle, int steering) {
-    if (_client == null || _client!.connectionStatus?.state != MqttConnectionState.connected) {
+    if (_client == null ||
+        _client!.connectionStatus?.state != MqttConnectionState.connected) {
       debugPrint('[MQTT] sendJoystick skipped - not connected');
       return;
     }
@@ -407,13 +448,16 @@ class MqttDeviceService {
       builder.payload!,
     );
 
-    debugPrint('[MQTT] 🕹️ Joystick sent: throttle=$throttle, steering=$steering');
+    debugPrint(
+      '[MQTT] 🕹️ Joystick sent: throttle=$throttle, steering=$steering',
+    );
   }
 
   /// Kirim route command langsung ke Arduino via MQTT
   /// Payload format: {'action': 'start'|'stop', 'waypoints': [{'lat': ..., 'lng': ...}]}
   void publishRoute(Map<String, dynamic> payload) {
-    if (_client == null || _client!.connectionStatus?.state != MqttConnectionState.connected) {
+    if (_client == null ||
+        _client!.connectionStatus?.state != MqttConnectionState.connected) {
       debugPrint('[MQTT] publishRoute skipped - not connected');
       return;
     }
@@ -425,20 +469,22 @@ class MqttDeviceService {
 
       _client!.publishMessage(
         'spedi/vehicle/route',
-        MqttQos.atLeastOnce,  // QoS 1 untuk route (penting, butuh ACK)
+        MqttQos.atLeastOnce, // QoS 1 untuk route (penting, butuh ACK)
         builder.payload!,
       );
 
       final action = payload['action'] ?? 'unknown';
       final wpCount = (payload['waypoints'] as List?)?.length ?? 0;
-      debugPrint('[MQTT] 🗺️ Route published: action=$action, waypoints=$wpCount');
+      debugPrint(
+        '[MQTT] 🗺️ Route published: action=$action, waypoints=$wpCount',
+      );
     } catch (e) {
       debugPrint('[MQTT] ❌ publishRoute error: $e');
     }
   }
 
   Future<void> stop() async {
-    _disposed = true;
+    _intentionalStop = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     unawaited(_mqttUpdatesSub?.cancel() ?? Future<void>.value());
@@ -457,7 +503,7 @@ class MqttDeviceService {
     _runningController.add(false);
 
     // Jika bukan karena dispose, coba reconnect manual sebagai fallback
-    if (!_disposed && _client?.autoReconnect != true) {
+    if (!_disposed && !_intentionalStop && _client?.autoReconnect != true) {
       _scheduleReconnect();
     }
   }
@@ -471,6 +517,7 @@ class MqttDeviceService {
 
   void dispose() {
     _disposed = true;
+    _intentionalStop = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     stop();

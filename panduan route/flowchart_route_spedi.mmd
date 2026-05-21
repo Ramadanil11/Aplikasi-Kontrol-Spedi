@@ -1,0 +1,96 @@
+---
+title: Flowchart Alur Route SPEDI
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"20px","primaryTextColor":"#0f172a","lineColor":"#64748b"},"flowchart":{"curve":"basis","nodeSpacing":45,"rankSpacing":55}} }%%
+flowchart TD
+    A([Mulai])
+    Z([Selesai])
+
+    subgraph APP[Aplikasi Flutter - Mode GRID]
+        direction TB
+        B[Operator buka GRID dan tambah waypoint]
+        C{Minimal 2 waypoint dan telemetry tersedia?}
+        C1[Tampilkan pesan validasi]
+        D[Operator tekan EXECUTE]
+        E[Aplikasi buat draft route lalu start route]
+    end
+
+    subgraph API[Backend Route API]
+        direction TB
+        F[Simpan route dan waypoint]
+        G[Dispatch route ke MQTT]
+    end
+
+    subgraph MQTT[MQTT Broker]
+        direction TB
+        H[Publish spedi/vehicle/route]
+        ST[Publish spedi/vehicle/status]
+    end
+
+    subgraph FW[Firmware ESP32 - terbaru: C:/spedi_boat_v15_cargo]
+        direction TB
+        I[Terima payload route]
+        J{Action?}
+        K[Stop: matikan autopilot dan reset waypoint]
+        L{Valid untuk start?<br/>GPS lock<br/>waypoints array<br/>jumlah >= 2<br/>koordinat valid}
+        LR[route_reject:<br/>gps_not_locked<br/>invalid_waypoints<br/>waypoints_less_than_2<br/>invalid_coordinate<br/>unknown_action]
+        M[Simpan waypoint ke memori]
+        N[Set waypointIndex 0 dan autopilotActive true]
+        O[Mode cargo terbaru:<br/>MAX_SPEED 200<br/>WP_NAV_SPEED 200<br/>APPROACH_SPEED 90]
+        P[route_start]
+        Q[Loop autopilot]
+        R{GPS fresh atau dead reckoning valid?}
+        S[Hitung jarak, bearing, heading error]
+        T{Masuk radius waypoint 5 m?}
+        U[Hitung steering dan target speed]
+        V[Kendalikan servo dan motor dengan ramp cargo]
+        W[wp_reached, naik waypoint]
+        X{Semua waypoint selesai?}
+        Y[route_complete dan autopilot off]
+    end
+
+    subgraph TEL[Database Telemetry dan UI]
+        direction TB
+        T1[Backend simpan status telemetry]
+        T2[Aplikasi baca database telemetry]
+        T3[UI tampilkan progress waypoint dan event route]
+    end
+
+    A --> B --> C
+    C -- Tidak --> C1 --> B
+    C -- Ya --> D --> E --> F --> G --> H --> I --> J
+
+    J -- stop --> K --> ST
+    J -- start --> L
+    J -- lainnya --> LR
+    L -- Tidak --> LR
+    L -- Ya --> M --> N --> O --> P --> ST
+    P --> Q
+
+    Q --> R
+    R -- Tidak --> Q
+    R -- Ya --> S --> T
+    T -- Tidak --> U --> V --> ST
+    T -- Ya --> W --> ST
+    W --> X
+    X -- Tidak --> Q
+    X -- Ya --> Y --> ST --> T1 --> T2 --> T3
+    LR --> ST
+    K --> Z
+    LR --> Z
+    Y --> Z
+
+    classDef app fill:#e8f3ff,stroke:#2563eb,stroke-width:2px,color:#0f172a
+    classDef backend fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#0f172a
+    classDef mqtt fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#0f172a
+    classDef firmware fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,color:#0f172a
+    classDef event fill:#f8fafc,stroke:#475569,stroke-width:2px,color:#0f172a
+    classDef reject fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#0f172a
+    classDef done fill:#ffffff,stroke:#0f172a,stroke-width:2px,color:#0f172a
+
+    class B,C,C1,D,E,T2,T3 app
+    class F,G,T1 backend
+    class H,ST mqtt
+    class I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y firmware
+    class LR reject
+    class A,Z done

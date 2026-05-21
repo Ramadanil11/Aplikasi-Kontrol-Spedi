@@ -10,6 +10,8 @@ import 'services/route_service.dart';
 import 'services/websocket_service.dart';
 import 'services/mqtt_device_service.dart';
 import 'services/database_telemetry_service.dart';
+import 'services/app_connection_service.dart';
+import 'services/grid_route_state_service.dart';
 import 'core/api_exception.dart';
 
 class GridControlPage extends StatefulWidget {
@@ -20,7 +22,8 @@ class GridControlPage extends StatefulWidget {
   State<GridControlPage> createState() => _GridControlPageState();
 }
 
-class _GridControlPageState extends State<GridControlPage> {
+class _GridControlPageState extends State<GridControlPage>
+    with WidgetsBindingObserver {
   // Lokasi kapal — diupdate realtime dari telemetri Arduino via MQTT
   LatLng _shipLatLng = const LatLng(-2.9545457, 104.7482617);
   bool _locationLoaded = false;
@@ -28,37 +31,37 @@ class _GridControlPageState extends State<GridControlPage> {
   double _shipBearing = 0.0;
 
   // ── Telemetri tambahan dari Arduino v14.5-S3 ─────────────────────────────
-  String _deviceMode       = 'idle';
-  int    _motorSpeed       = 0;
-  int    _waypointIndex    = 0;
-  bool   _autopilotActive  = false;
-  bool   _smartMoveActive  = false;
-  int    _obstacleLeft     = 400;
-  int    _obstacleRight    = 400;
-  int    _gpsQuality       = 0;
-  double _hdop             = 99.9;
-  int    _satelliteCount   = 0;
-  bool   _gpsFix           = false;
-  double _lastHeading      = 0.0;
+  String _deviceMode = 'idle';
+  int _motorSpeed = 0;
+  int _waypointIndex = 0;
+  bool _autopilotActive = false;
+  bool _smartMoveActive = false;
+  int _obstacleLeft = 400;
+  int _obstacleRight = 400;
+  int _gpsQuality = 0;
+  double _hdop = 99.9;
+  int _satelliteCount = 0;
+  bool _gpsFix = false;
+  double _lastHeading = 0.0;
 
   // ── Telemetri baru dari Arduino v14.8-S3 (Navigation Grid) ──────────────
-  int    _waypointCount    = 0;
-  bool   _headingValid     = true;
-  bool   _motorDisabled    = false;
+  int _waypointCount = 0;
+  bool _headingValid = true;
+  bool _motorDisabled = false;
 
-  double _xte              = 0.0;
-  double _arrivalRadius    = 3.0;
-  int    _wpElapsedS       = 0;
-  int    _wpTimeoutS       = 120;
-  double _wpDistM          = 0.0;
+  double _xte = 0.0;
+  double _arrivalRadius = 3.0;
+  int _wpElapsedS = 0;
+  int _wpTimeoutS = 120;
+  double _wpDistM = 0.0;
 
-  // ─── Telemetri baru dari Arduino v15.0-S3 (GSM + M8U Sensor Fusion) ────
-  bool   _gsmConnected    = false;
-  int    _signalQuality   = 0;
-  double _drHeading       = 0.0;
-  double _drHeadingAcc    = 999.0;
-  bool   _drValid         = false;
-  int    _fusionMode      = 0;
+  // Telemetri baru dari Arduino v15.0-S3 (WiFi + M8U Sensor Fusion)
+  bool _wifiConnected = false;
+  int _wifiSignal = 0;
+  double _drHeading = 0.0;
+  double _drHeadingAcc = 999.0;
+  bool _drValid = false;
+  int _fusionMode = 0;
 
   List<LatLng> waypoints = [];
   bool isExecuting = false;
@@ -70,6 +73,8 @@ class _GridControlPageState extends State<GridControlPage> {
   final _wsService = WebSocketService.instance;
   final _mqttDevice = MqttDeviceService.instance;
   final _dbTelemetry = DatabaseTelemetryService.instance;
+  final _connectionService = AppConnectionService.instance;
+  final _gridState = GridRouteStateService.instance;
 
   // flutter_map controller
   final MapController _mapController = MapController();
@@ -86,6 +91,8 @@ class _GridControlPageState extends State<GridControlPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _restoreGridState();
 
     // Listen WebSocket connection state
     _wsStateSub = _wsService.stateStream.listen((state) {
@@ -107,12 +114,62 @@ class _GridControlPageState extends State<GridControlPage> {
     _initServices();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _restoreGridState();
+      unawaited(_initServices());
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _restoreGridState() {
+    waypoints = List<LatLng>.of(_gridState.waypoints);
+    isExecuting = _gridState.isExecuting;
+    _activeRouteId = _gridState.activeRouteId;
+    _waitingRouteAck = _gridState.waitingRouteAck;
+    _lastRouteSeq = _gridState.lastRouteSeq;
+    _routeSeqInitialized = _gridState.routeSeqInitialized;
+  }
+
+  void _saveGridState() {
+    _gridState.save(
+      waypoints: waypoints,
+      isExecuting: isExecuting,
+      activeRouteId: _activeRouteId,
+      waitingRouteAck: _waitingRouteAck,
+      lastRouteSeq: _lastRouteSeq,
+      routeSeqInitialized: _routeSeqInitialized,
+    );
+  }
+
+  void _clearSavedGridState() {
+    _clearRouteAckWait(save: false);
+    _activeRouteId = null;
+    _lastRouteSeq = 0;
+    _routeSeqInitialized = false;
+    _gridState.clear();
+  }
+
   /// Hanya buka session & connect jika belum aktif
   Future<void> _initServices() async {
+    if (!_sessionService.hasSession ||
+        !_mqttDevice.isRunning ||
+        _wsService.state != WsConnectionState.connected) {
+      try {
+        await _connectionService.ensureConnected(source: 'grid');
+        _onTelemetryUpdate();
+        return;
+      } catch (e) {
+        debugPrint('[GRID] reconnect failed: $e');
+      }
+    }
+
     const deviceId = 'cfead5c1-4e4e-42da-af88-70620b8e3eac';
     _dbTelemetry.start(deviceId: deviceId);
 
-    if (_mqttDevice.isRunning && _wsService.state == WsConnectionState.connected) {
+    if (_mqttDevice.isRunning &&
+        _wsService.state == WsConnectionState.connected) {
       debugPrint('[GRID] Services sudah aktif — skip reconnect');
       _onTelemetryUpdate();
       return;
@@ -122,7 +179,9 @@ class _GridControlPageState extends State<GridControlPage> {
     if (_sessionService.hasSession) {
       debugPrint('[GRID] Session ada — reconnect WS & MQTT saja');
       if (_wsService.state != WsConnectionState.connected) {
-        try { await _wsService.connect(); } catch (_) {}
+        try {
+          await _wsService.connect();
+        } catch (_) {}
       }
       if (!_mqttDevice.isRunning) {
         _mqttDevice.startAsync();
@@ -144,43 +203,48 @@ class _GridControlPageState extends State<GridControlPage> {
         !_locationLoaded && _dbTelemetry.locationLoaded && hasValidLocation;
 
     setState(() {
-      _shipLatLng      = newLatLng;
-      _shipSpeed       = _dbTelemetry.arduinoSpeed;
-      _shipBearing     = _dbTelemetry.arduinoBearing;
-      _locationLoaded  = _dbTelemetry.locationLoaded;
+      _shipLatLng = newLatLng;
+      _shipSpeed = _dbTelemetry.arduinoSpeed;
+      _shipBearing = _dbTelemetry.arduinoBearing;
+      _locationLoaded = _dbTelemetry.locationLoaded;
 
       // Telemetri tambahan v14.5-S3
-      _deviceMode      = _dbTelemetry.deviceMode;
-      _motorSpeed      = _dbTelemetry.motorSpeed;
-      _waypointIndex   = _dbTelemetry.waypointIndex;
+      _deviceMode = _dbTelemetry.deviceMode;
+      _motorSpeed = _dbTelemetry.motorSpeed;
+      _waypointIndex = _dbTelemetry.waypointIndex;
       _autopilotActive = _dbTelemetry.autopilotActive;
       _smartMoveActive = _dbTelemetry.smartMoveActive;
-      _obstacleLeft    = _dbTelemetry.obstacleLeft;
-      _obstacleRight   = _dbTelemetry.obstacleRight;
-      _gpsQuality      = _dbTelemetry.gpsQuality;
-      _hdop            = _dbTelemetry.arduinoHdop;
-      _satelliteCount  = _dbTelemetry.satelliteCount;
-      _gpsFix          = _dbTelemetry.gpsFix;
-      _lastHeading     = _dbTelemetry.lastHeading;
+      _obstacleLeft = _dbTelemetry.obstacleLeft;
+      _obstacleRight = _dbTelemetry.obstacleRight;
+      _gpsQuality = _dbTelemetry.gpsQuality;
+      _hdop = _dbTelemetry.arduinoHdop;
+      _satelliteCount = _dbTelemetry.satelliteCount;
+      _gpsFix = _dbTelemetry.gpsFix;
+      _lastHeading = _dbTelemetry.lastHeading;
 
       // Telemetri baru v14.8-S3 (Navigation Grid)
-      _waypointCount   = _dbTelemetry.waypointCount;
-      _headingValid    = _dbTelemetry.headingValid;
-      _motorDisabled   = _dbTelemetry.motorDisabled;
+      _waypointCount = _dbTelemetry.waypointCount;
+      _headingValid = _dbTelemetry.headingValid;
+      _motorDisabled = _dbTelemetry.motorDisabled;
 
-      _xte             = _dbTelemetry.xte;
-      _arrivalRadius   = _dbTelemetry.arrivalRadius;
-      _wpElapsedS      = _dbTelemetry.wpElapsedS;
-      _wpTimeoutS      = _dbTelemetry.wpTimeoutS;
-      _wpDistM         = _dbTelemetry.wpDistM;
+      _xte = _dbTelemetry.xte;
+      _arrivalRadius = _dbTelemetry.arrivalRadius;
+      _wpElapsedS = _dbTelemetry.wpElapsedS;
+      _wpTimeoutS = _dbTelemetry.wpTimeoutS;
+      _wpDistM = _dbTelemetry.wpDistM;
 
-      // Telemetri baru v15.0-S3 (GSM + M8U Sensor Fusion)
-      _gsmConnected   = _dbTelemetry.gsmConnected;
-      _signalQuality  = _dbTelemetry.signalQuality;
-      _drHeading      = _dbTelemetry.drHeading;
-      _drHeadingAcc   = _dbTelemetry.drHeadingAcc;
-      _drValid        = _dbTelemetry.drValid;
-      _fusionMode     = _dbTelemetry.fusionMode;
+      // Telemetri baru v15.0-S3 (WiFi + M8U Sensor Fusion)
+      _wifiConnected =
+          _dbTelemetry.wifiConnected ||
+          _mqttDevice.wifiConnected ||
+          _mqttDevice.isRunning;
+      _wifiSignal = _dbTelemetry.wifiSignal != 0
+          ? _dbTelemetry.wifiSignal
+          : _mqttDevice.wifiSignal;
+      _drHeading = _dbTelemetry.drHeading;
+      _drHeadingAcc = _dbTelemetry.drHeadingAcc;
+      _drValid = _dbTelemetry.drValid;
+      _fusionMode = _dbTelemetry.fusionMode;
 
       // Sinkronkan status executing dengan autopilot Arduino
       if (_autopilotActive && !isExecuting) {
@@ -189,10 +253,13 @@ class _GridControlPageState extends State<GridControlPage> {
       } else if (!_waitingRouteAck &&
           !_autopilotActive &&
           isExecuting &&
+          waypoints.isEmpty &&
+          _activeRouteId == null &&
           _deviceMode != 'auto') {
         isExecuting = false;
       }
     });
+    _saveGridState();
 
     // Hanya geser kamera saat pertama kali dapat GPS dari Arduino.
     if (shouldCenterMap && !_hasCenteredMap) {
@@ -220,10 +287,12 @@ class _GridControlPageState extends State<GridControlPage> {
     if (!_routeSeqInitialized) {
       _lastRouteSeq = routeSeq;
       _routeSeqInitialized = true;
+      _saveGridState();
       return;
     }
     if (routeSeq == _lastRouteSeq) return;
     _lastRouteSeq = routeSeq;
+    _saveGridState();
 
     _handleRouteEvent(
       event: _dbTelemetry.routeEvent,
@@ -249,7 +318,8 @@ class _GridControlPageState extends State<GridControlPage> {
 
     switch (event) {
       case 'wp_reached':
-        message = 'WP ${wpIdx + 1}/$wpTotal tercapai (${dist.toStringAsFixed(1)}m)';
+        message =
+            'WP ${wpIdx + 1}/$wpTotal tercapai (${dist.toStringAsFixed(1)}m)';
         bgColor = const Color(0xFF10B981);
         icon = Icons.check_circle;
         break;
@@ -259,11 +329,14 @@ class _GridControlPageState extends State<GridControlPage> {
         icon = Icons.timer_off;
         break;
       case 'route_complete':
-        _clearRouteAckWait();
+        _clearSavedGridState();
         message = 'Rute selesai! Semua $wpTotal waypoint tercapai.';
         bgColor = const Color(0xFF10B981);
         icon = Icons.flag;
-        setState(() => isExecuting = false);
+        setState(() {
+          isExecuting = false;
+          waypoints.clear();
+        });
         break;
       case 'route_start':
         _clearRouteAckWait();
@@ -271,20 +344,27 @@ class _GridControlPageState extends State<GridControlPage> {
         bgColor = const Color(0xFF06B6D4);
         icon = Icons.play_arrow;
         setState(() => isExecuting = true);
+        _saveGridState();
         break;
       case 'route_reject':
-        _clearRouteAckWait();
+        _clearSavedGridState();
         message = _routeRejectMessage(reason);
         bgColor = const Color(0xFFEF4444);
         icon = Icons.error_outline;
-        setState(() => isExecuting = false);
+        setState(() {
+          isExecuting = false;
+          waypoints.clear();
+        });
         break;
       case 'route_stop':
-        _clearRouteAckWait();
+        _clearSavedGridState();
         message = 'Rute dihentikan';
         bgColor = const Color(0xFFEF4444);
         icon = Icons.stop;
-        setState(() => isExecuting = false);
+        setState(() {
+          isExecuting = false;
+          waypoints.clear();
+        });
         break;
       default:
         return; // event tidak dikenal, abaikan
@@ -296,7 +376,9 @@ class _GridControlPageState extends State<GridControlPage> {
           children: [
             Icon(icon, color: Colors.white, size: 16),
             const SizedBox(width: 8),
-            Expanded(child: Text(message, style: const TextStyle(fontSize: 12))),
+            Expanded(
+              child: Text(message, style: const TextStyle(fontSize: 12)),
+            ),
           ],
         ),
         backgroundColor: bgColor,
@@ -357,6 +439,8 @@ class _GridControlPageState extends State<GridControlPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _saveGridState();
     _dbTelemetry.telemetryNotifier.removeListener(_onTelemetryUpdate);
     _mqttRunningSub?.cancel();
     _wsStateSub?.cancel();
@@ -368,25 +452,32 @@ class _GridControlPageState extends State<GridControlPage> {
   }
 
   void _onMapTap(TapPosition tapPosition, LatLng latlng) {
-    if (!isExecuting) setState(() => waypoints.add(latlng));
+    if (!isExecuting) {
+      setState(() => waypoints.add(latlng));
+      _saveGridState();
+    }
   }
 
   void _removeLastWaypoint() {
-    if (waypoints.isNotEmpty) setState(() => waypoints.removeLast());
+    if (waypoints.isNotEmpty) {
+      setState(() => waypoints.removeLast());
+      _saveGridState();
+    }
   }
 
   void _clearAllWaypoints() {
-    _clearRouteAckWait();
+    _clearSavedGridState();
     setState(() {
       waypoints.clear();
       isExecuting = false;
     });
   }
 
-  void _clearRouteAckWait() {
+  void _clearRouteAckWait({bool save = true}) {
     _routeAckTimer?.cancel();
     _routeAckTimer = null;
     _waitingRouteAck = false;
+    if (save) _saveGridState();
   }
 
   void _startRouteAckTimer() {
@@ -394,12 +485,14 @@ class _GridControlPageState extends State<GridControlPage> {
     _waitingRouteAck = true;
     _lastRouteSeq = _dbTelemetry.routeSeq;
     _routeSeqInitialized = true;
+    _saveGridState();
     _routeAckTimer = Timer(const Duration(seconds: 7), () {
       if (!mounted || !_waitingRouteAck || _autopilotActive) return;
       setState(() {
         _waitingRouteAck = false;
         isExecuting = false;
       });
+      _saveGridState();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -445,6 +538,7 @@ class _GridControlPageState extends State<GridControlPage> {
       return;
     }
     setState(() => isExecuting = true);
+    _saveGridState();
     try {
       await _startRouteViaBackend();
       _startRouteAckTimer();
@@ -463,6 +557,7 @@ class _GridControlPageState extends State<GridControlPage> {
       _clearRouteAckWait();
       if (mounted) {
         setState(() => isExecuting = false);
+        _saveGridState();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Gagal start route: $e'),
@@ -494,6 +589,7 @@ class _GridControlPageState extends State<GridControlPage> {
 
     final startedRoute = await _routeService.startRoute(route.id);
     _activeRouteId = startedRoute.id;
+    _saveGridState();
     debugPrint(
       '[GRID] Backend route started: ${startedRoute.id} status=${startedRoute.status.name}',
     );
@@ -506,13 +602,17 @@ class _GridControlPageState extends State<GridControlPage> {
     );
     if (activeRoutes.isEmpty) return;
 
-    debugPrint('[GRID] Stopping ${activeRoutes.length} active backend route(s)');
+    debugPrint(
+      '[GRID] Stopping ${activeRoutes.length} active backend route(s)',
+    );
     for (final route in activeRoutes) {
       try {
         await _routeService.stopRoute(route.id);
         debugPrint('[GRID] Backend route stopped: ${route.id}');
       } catch (e) {
-        debugPrint('[GRID] Failed to stop active backend route ${route.id}: $e');
+        debugPrint(
+          '[GRID] Failed to stop active backend route ${route.id}: $e',
+        );
         rethrow;
       }
     }
@@ -526,6 +626,7 @@ class _GridControlPageState extends State<GridControlPage> {
         await _routeService.stopRoute(_activeRouteId!);
         debugPrint('[GRID] Backend route stopped: $_activeRouteId');
         _activeRouteId = null;
+        _saveGridState();
       } else {
         await _stopActiveBackendRoutes(deviceId);
       }
@@ -534,7 +635,9 @@ class _GridControlPageState extends State<GridControlPage> {
     }
     setState(() {
       isExecuting = false;
+      waypoints.clear();
     });
+    _clearSavedGridState();
   }
 
   int get totalSegments => waypoints.length;
@@ -602,6 +705,7 @@ class _GridControlPageState extends State<GridControlPage> {
           ),
           const SizedBox(width: 12),
           _buildModeButton('MANUAL', false, () {
+            _saveGridState();
             Navigator.of(context).pushReplacement(
               MaterialPageRoute(
                 builder: (_) => ShipControllerPage(username: widget.username),
@@ -629,15 +733,15 @@ class _GridControlPageState extends State<GridControlPage> {
               color: _deviceMode == 'auto'
                   ? const Color(0xFF10B981).withOpacity(0.25)
                   : _deviceMode == 'manual'
-                      ? const Color(0xFFF59E0B).withOpacity(0.25)
-                      : Colors.black.withOpacity(0.3),
+                  ? const Color(0xFFF59E0B).withOpacity(0.25)
+                  : Colors.black.withOpacity(0.3),
               borderRadius: BorderRadius.circular(4),
               border: Border.all(
                 color: _deviceMode == 'auto'
                     ? const Color(0xFF10B981)
                     : _deviceMode == 'manual'
-                        ? const Color(0xFFF59E0B)
-                        : const Color(0xFF475569),
+                    ? const Color(0xFFF59E0B)
+                    : const Color(0xFF475569),
                 width: 1,
               ),
             ),
@@ -649,8 +753,8 @@ class _GridControlPageState extends State<GridControlPage> {
                 color: _deviceMode == 'auto'
                     ? const Color(0xFF10B981)
                     : _deviceMode == 'manual'
-                        ? const Color(0xFFF59E0B)
-                        : const Color(0xFF64748B),
+                    ? const Color(0xFFF59E0B)
+                    : const Color(0xFF64748B),
                 letterSpacing: 0.5,
               ),
             ),
@@ -662,8 +766,8 @@ class _GridControlPageState extends State<GridControlPage> {
             color: _gpsQuality >= 3
                 ? Colors.green
                 : _gpsQuality >= 2
-                    ? Colors.yellow
-                    : Colors.orange,
+                ? Colors.yellow
+                : Colors.orange,
             size: 14,
           ),
           const SizedBox(width: 3),
@@ -803,7 +907,10 @@ class _GridControlPageState extends State<GridControlPage> {
           height: isActive ? 42 : 36,
           child: GestureDetector(
             onTap: () {
-              if (!isExecuting) setState(() => waypoints.removeAt(idx));
+              if (!isExecuting) {
+                setState(() => waypoints.removeAt(idx));
+                _saveGridState();
+              }
             },
             child: Stack(
               alignment: Alignment.center,
@@ -853,35 +960,43 @@ class _GridControlPageState extends State<GridControlPage> {
     if (_autopilotActive && _waypointIndex < waypoints.length) {
       // Segmen yang sudah dilewati (abu-abu, tipis)
       if (_waypointIndex > 0) {
-        polylines.add(Polyline(
-          points: waypoints.sublist(0, _waypointIndex),
-          color: const Color(0xFF475569),
-          strokeWidth: 2,
-        ));
+        polylines.add(
+          Polyline(
+            points: waypoints.sublist(0, _waypointIndex),
+            color: const Color(0xFF475569),
+            strokeWidth: 2,
+          ),
+        );
       }
 
       // Segmen aktif: kapal → waypoint target (hijau)
-      polylines.add(Polyline(
-        points: [_shipLatLng, waypoints[_waypointIndex]],
-        color: const Color(0xFF10B981),
-        strokeWidth: 3.5,
-      ));
+      polylines.add(
+        Polyline(
+          points: [_shipLatLng, waypoints[_waypointIndex]],
+          color: const Color(0xFF10B981),
+          strokeWidth: 3.5,
+        ),
+      );
 
       // Segmen sisa (cyan)
       if (_waypointIndex < waypoints.length) {
-        polylines.add(Polyline(
-          points: waypoints.sublist(_waypointIndex),
-          color: const Color(0xFF22D3EE),
-          strokeWidth: 2.5,
-        ));
+        polylines.add(
+          Polyline(
+            points: waypoints.sublist(_waypointIndex),
+            color: const Color(0xFF22D3EE),
+            strokeWidth: 2.5,
+          ),
+        );
       }
     } else {
       // Tidak autopilot — tampilkan rute penuh
-      polylines.add(Polyline(
-        points: [_shipLatLng, ...waypoints],
-        color: const Color(0xFF22D3EE),
-        strokeWidth: 3,
-      ));
+      polylines.add(
+        Polyline(
+          points: [_shipLatLng, ...waypoints],
+          color: const Color(0xFF22D3EE),
+          strokeWidth: 3,
+        ),
+      );
     }
 
     return polylines;
@@ -936,11 +1051,16 @@ class _GridControlPageState extends State<GridControlPage> {
                 children: [
                   // GPS info banner
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.75),
                       borderRadius: BorderRadius.circular(5),
-                      border: Border.all(color: _gpsStatusColor.withOpacity(0.5)),
+                      border: Border.all(
+                        color: _gpsStatusColor.withOpacity(0.5),
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -950,7 +1070,9 @@ class _GridControlPageState extends State<GridControlPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              _locationLoaded ? Icons.gps_fixed : Icons.gps_not_fixed,
+                              _locationLoaded
+                                  ? Icons.gps_fixed
+                                  : Icons.gps_not_fixed,
                               color: _gpsStatusColor,
                               size: 12,
                             ),
@@ -1040,11 +1162,11 @@ class _GridControlPageState extends State<GridControlPage> {
                       Colors.red,
                     ),
                   ],
-                  if (_dbTelemetry.isRunning && !_gsmConnected) ...[
+                  if (_dbTelemetry.isRunning && !_wifiConnected) ...[
                     const SizedBox(height: 4),
                     _buildWarningChip(
-                      Icons.signal_cellular_off,
-                      'GSM tidak terhubung — sinyal seluler hilang',
+                      Icons.wifi_off,
+                      'WiFi/MQTT belum terhubung',
                       Colors.red,
                     ),
                   ],
@@ -1083,7 +1205,10 @@ class _GridControlPageState extends State<GridControlPage> {
                 right: 0,
                 child: Center(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.55),
                       borderRadius: BorderRadius.circular(12),
@@ -1091,11 +1216,18 @@ class _GridControlPageState extends State<GridControlPage> {
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.touch_app, color: Color(0xFF67E8F9), size: 12),
+                        Icon(
+                          Icons.touch_app,
+                          color: Color(0xFF67E8F9),
+                          size: 12,
+                        ),
                         SizedBox(width: 4),
                         Text(
                           'Tap peta untuk set tujuan',
-                          style: TextStyle(color: Color(0xFF67E8F9), fontSize: 10),
+                          style: TextStyle(
+                            color: Color(0xFF67E8F9),
+                            fontSize: 10,
+                          ),
                         ),
                       ],
                     ),
@@ -1126,8 +1258,11 @@ class _GridControlPageState extends State<GridControlPage> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.warning_amber_rounded,
-                            color: Colors.white, size: 14),
+                        const Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.white,
+                          size: 14,
+                        ),
                         const SizedBox(width: 6),
                         Text(
                           'OBSTACLE AVOIDANCE  L:${_obstacleLeft}cm  R:${_obstacleRight}cm',
@@ -1352,8 +1487,10 @@ class _GridControlPageState extends State<GridControlPage> {
                             ),
                             if (!isExecuting)
                               GestureDetector(
-                                onTap: () =>
-                                    setState(() => waypoints.removeAt(i)),
+                                onTap: () {
+                                  setState(() => waypoints.removeAt(i));
+                                  _saveGridState();
+                                },
                                 child: const Icon(
                                   Icons.close,
                                   color: Color(0xFF475569),
@@ -1399,67 +1536,101 @@ class _GridControlPageState extends State<GridControlPage> {
           // Row 1: GPS status | SAT | HDOP
           Row(
             children: [
-              Expanded(child: _tinyCell(
-                'GPS', _gpsStatusLabel,
-                color: _gpsStatusColor,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'GPS',
+                  _gpsStatusLabel,
+                  color: _gpsStatusColor,
+                ),
+              ),
               const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'SAT', '$_satelliteCount',
-                color: _gpsQuality >= 2 ? Colors.green : Colors.orange,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'SAT',
+                  '$_satelliteCount',
+                  color: _gpsQuality >= 2 ? Colors.green : Colors.orange,
+                ),
+              ),
               const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'HDOP', _hdop < 90 ? _hdop.toStringAsFixed(1) : '--',
-                color: _hdop <= 2.5 ? Colors.green : _hdop <= 5.0 ? Colors.yellow : Colors.orange,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'HDOP',
+                  _hdop < 90 ? _hdop.toStringAsFixed(1) : '--',
+                  color: _hdop <= 2.5
+                      ? Colors.green
+                      : _hdop <= 5.0
+                      ? Colors.yellow
+                      : Colors.orange,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 4),
           // Row 2: SPD | MTR | WPT
           Row(
             children: [
-              Expanded(child: _tinyCell(
-                'SPD', _shipSpeed.toStringAsFixed(1),
-              )),
+              Expanded(child: _tinyCell('SPD', _shipSpeed.toStringAsFixed(1))),
               const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'MTR', '$_motorSpeed',
-                color: _motorDisabled
-                    ? Colors.red
-                    : _motorSpeed != 0 ? const Color(0xFF22D3EE) : null,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'MTR',
+                  '$_motorSpeed',
+                  color: _motorDisabled
+                      ? Colors.red
+                      : _motorSpeed != 0
+                      ? const Color(0xFF22D3EE)
+                      : null,
+                ),
+              ),
               const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'WPT',
-                _autopilotActive && _waypointCount > 0
-                    ? '${_waypointIndex + 1}/$_waypointCount'
-                    : _autopilotActive
-                        ? '${_waypointIndex + 1}/${waypoints.length}'
-                        : '${waypoints.length}',
-                color: _autopilotActive ? const Color(0xFF10B981) : null,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'WPT',
+                  _autopilotActive && _waypointCount > 0
+                      ? '${_waypointIndex + 1}/$_waypointCount'
+                      : _autopilotActive
+                      ? '${_waypointIndex + 1}/${waypoints.length}'
+                      : '${waypoints.length}',
+                  color: _autopilotActive ? const Color(0xFF10B981) : null,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 4),
           // Row 3: OBS-L | OBS-R | DIST (jarak ke WP)
           Row(
             children: [
-              Expanded(child: _tinyCell(
-                'OBS-L', '${_obstacleLeft}cm',
-                color: _obstacleLeft < 35 ? Colors.red : _obstacleLeft < 80 ? Colors.orange : null,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'OBS-L',
+                  '${_obstacleLeft}cm',
+                  color: _obstacleLeft < 35
+                      ? Colors.red
+                      : _obstacleLeft < 80
+                      ? Colors.orange
+                      : null,
+                ),
+              ),
               const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'OBS-R', '${_obstacleRight}cm',
-                color: _obstacleRight < 35 ? Colors.red : _obstacleRight < 80 ? Colors.orange : null,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'OBS-R',
+                  '${_obstacleRight}cm',
+                  color: _obstacleRight < 35
+                      ? Colors.red
+                      : _obstacleRight < 80
+                      ? Colors.orange
+                      : null,
+                ),
+              ),
               const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'DIST',
-                _autopilotActive ? '${_wpDistM.toStringAsFixed(1)}m' : '--',
-                color: _autopilotActive ? const Color(0xFF22D3EE) : null,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'DIST',
+                  _autopilotActive ? '${_wpDistM.toStringAsFixed(1)}m' : '--',
+                  color: _autopilotActive ? const Color(0xFF22D3EE) : null,
+                ),
+              ),
             ],
           ),
           // Row 4 (hanya saat autopilot): XTE | RADIUS | TIMEOUT
@@ -1467,31 +1638,37 @@ class _GridControlPageState extends State<GridControlPage> {
             const SizedBox(height: 4),
             Row(
               children: [
-                Expanded(child: _tinyCell(
-                  'XTE',
-                  '${_xte.toStringAsFixed(1)}m',
-                  color: _xte.abs() > 5.0
-                      ? Colors.red
-                      : _xte.abs() > 2.0
-                          ? Colors.orange
-                          : const Color(0xFF10B981),
-                )),
+                Expanded(
+                  child: _tinyCell(
+                    'XTE',
+                    '${_xte.toStringAsFixed(1)}m',
+                    color: _xte.abs() > 5.0
+                        ? Colors.red
+                        : _xte.abs() > 2.0
+                        ? Colors.orange
+                        : const Color(0xFF10B981),
+                  ),
+                ),
                 const SizedBox(width: 4),
-                Expanded(child: _tinyCell(
-                  'RAD',
-                  '${_arrivalRadius.toStringAsFixed(1)}m',
-                  color: const Color(0xFF67E8F9),
-                )),
+                Expanded(
+                  child: _tinyCell(
+                    'RAD',
+                    '${_arrivalRadius.toStringAsFixed(1)}m',
+                    color: const Color(0xFF67E8F9),
+                  ),
+                ),
                 const SizedBox(width: 4),
-                Expanded(child: _tinyCell(
-                  'TMO',
-                  '${_wpElapsedS}s',
-                  color: timeoutPct > 80
-                      ? Colors.red
-                      : timeoutPct > 50
-                          ? Colors.orange
-                          : null,
-                )),
+                Expanded(
+                  child: _tinyCell(
+                    'TMO',
+                    '${_wpElapsedS}s',
+                    color: timeoutPct > 80
+                        ? Colors.red
+                        : timeoutPct > 50
+                        ? Colors.orange
+                        : null,
+                  ),
+                ),
               ],
             ),
             // Timeout progress bar
@@ -1499,51 +1676,72 @@ class _GridControlPageState extends State<GridControlPage> {
             ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
-                value: _wpTimeoutS > 0 ? (_wpElapsedS / _wpTimeoutS).clamp(0.0, 1.0) : 0.0,
+                value: _wpTimeoutS > 0
+                    ? (_wpElapsedS / _wpTimeoutS).clamp(0.0, 1.0)
+                    : 0.0,
                 minHeight: 3,
                 backgroundColor: const Color(0xFF1E293B),
                 valueColor: AlwaysStoppedAnimation<Color>(
                   timeoutPct > 80
                       ? Colors.red
                       : timeoutPct > 50
-                          ? Colors.orange
-                          : const Color(0xFF10B981),
+                      ? Colors.orange
+                      : const Color(0xFF10B981),
                 ),
               ),
             ),
           ],
           const SizedBox(height: 4),
-          // Row 5: GSM | SIG | IMU (v15.0 — GSM + Sensor Fusion)
+          // Row 5: WiFi | RSSI | IMU
           Row(
             children: [
-              Expanded(child: _tinyCell(
-                'GSM', _gsmConnected ? 'ON' : 'OFF',
-                color: _gsmConnected ? Colors.green : Colors.red,
-              )),
+              Expanded(
+                child: _tinyCell(
+                  'WIFI',
+                  _wifiConnected ? 'ON' : 'OFF',
+                  color: _wifiConnected ? Colors.green : Colors.red,
+                ),
+              ),
               const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'SIG', '$_signalQuality/31',
-                color: _signalQuality > 15
-                    ? Colors.green
-                    : _signalQuality > 8
-                        ? Colors.yellow
-                        : Colors.red,
-              )),
-              const SizedBox(width: 4),
-              Expanded(child: _tinyCell(
-                'IMU',
-                _fusionMode == 2 ? 'FUSED'
-                    : _fusionMode == 3 ? 'DR'
-                    : _fusionMode == 1 ? 'CALIB'
-                    : 'INIT',
-                color: _fusionMode == 2
-                    ? Colors.green
-                    : _fusionMode == 3
-                        ? Colors.orange
-                        : _fusionMode == 1
+              Expanded(
+                child: _tinyCell(
+                  'RSSI',
+                  _wifiSignal == 0 ? '--' : '$_wifiSignal',
+                  color: _wifiSignal == 0
+                      ? const Color(0xFF64748B)
+                      : _wifiSignal < 0
+                      ? (_wifiSignal > -67
+                            ? Colors.green
+                            : _wifiSignal > -75
                             ? Colors.yellow
-                            : Colors.red,
-              )),
+                            : Colors.red)
+                      : (_wifiSignal > 15
+                            ? Colors.green
+                            : _wifiSignal > 8
+                            ? Colors.yellow
+                            : Colors.red),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: _tinyCell(
+                  'IMU',
+                  _fusionMode == 2
+                      ? 'FUSED'
+                      : _fusionMode == 3
+                      ? 'DR'
+                      : _fusionMode == 1
+                      ? 'CALIB'
+                      : 'INIT',
+                  color: _fusionMode == 2
+                      ? Colors.green
+                      : _fusionMode == 3
+                      ? Colors.orange
+                      : _fusionMode == 1
+                      ? Colors.yellow
+                      : Colors.red,
+                ),
+              ),
             ],
           ),
         ],
@@ -1556,15 +1754,25 @@ class _GridControlPageState extends State<GridControlPage> {
     final c = color ?? const Color(0xFF67E8F9);
     return Column(
       children: [
-        Text(label, style: const TextStyle(
-          color: Color(0xFF64748B), fontSize: 7,
-          fontWeight: FontWeight.w600, letterSpacing: 0.3,
-        )),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF64748B),
+            fontSize: 7,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.3,
+          ),
+        ),
         const SizedBox(height: 1),
-        Text(value, style: TextStyle(
-          color: c, fontSize: 11,
-          fontWeight: FontWeight.bold, fontFamily: 'monospace',
-        )),
+        Text(
+          value,
+          style: TextStyle(
+            color: c,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+          ),
+        ),
       ],
     );
   }
@@ -1577,8 +1785,10 @@ class _GridControlPageState extends State<GridControlPage> {
     }
     if (!_gpsFix) return 'MENCARI SATELIT...';
     if (!_locationLoaded) return 'GPS FIX - MENUNGGU KOORDINAT';
-    if (_gpsQuality >= 3) return 'GPS BAGUS  ${_satelliteCount}sat  HDOP:${_hdop.toStringAsFixed(1)}';
-    if (_gpsQuality >= 2) return 'GPS CUKUP  ${_satelliteCount}sat  HDOP:${_hdop.toStringAsFixed(1)}';
+    if (_gpsQuality >= 3)
+      return 'GPS BAGUS  ${_satelliteCount}sat  HDOP:${_hdop.toStringAsFixed(1)}';
+    if (_gpsQuality >= 2)
+      return 'GPS CUKUP  ${_satelliteCount}sat  HDOP:${_hdop.toStringAsFixed(1)}';
     return 'GPS LEMAH  ${_satelliteCount}sat  HDOP:${_hdop.toStringAsFixed(1)}';
   }
 
@@ -1612,7 +1822,8 @@ class _GridControlPageState extends State<GridControlPage> {
   // ─── CONTROL PANEL ────────────────────────────────────────────────────────
 
   Widget _buildControlPanel() {
-    final canExecuteRoute = waypoints.length >= 2 &&
+    final canExecuteRoute =
+        waypoints.length >= 2 &&
         !isExecuting &&
         _dbTelemetry.isRunning &&
         _gpsFix &&

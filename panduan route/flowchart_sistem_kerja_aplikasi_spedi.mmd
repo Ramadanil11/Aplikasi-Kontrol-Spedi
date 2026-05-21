@@ -1,0 +1,119 @@
+---
+title: Flowchart Sistem Kerja Aplikasi SPEDI
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial","fontSize":"24px","primaryTextColor":"#0f172a","lineColor":"#64748b"},"flowchart":{"defaultRenderer":"elk","curve":"linear","nodeSpacing":55,"rankSpacing":80,"padding":20}} }%%
+flowchart LR
+    START([Mulai])
+    END([Selesai])
+
+    subgraph S1[1. Startup Aplikasi]
+        direction TB
+        A1[App dibuka]
+        A2[Lock landscape]
+        A3[Set API base URL]
+        A4[Auto-login backend]
+        A5[Masuk halaman MANUAL]
+    end
+
+    subgraph S2[2. Koneksi Service]
+        direction TB
+        B1[Buka atau pakai ulang session device]
+        B2[Connect WebSocket]
+        B3[Start MQTT control path]
+        B4[Start database telemetry polling]
+        B5{Service siap?}
+        B6[Tampilkan error koneksi / device dipakai]
+    end
+
+    subgraph S3[3. Pilih Mode]
+        direction TB
+        C1{Operator pilih mode}
+        C2[MANUAL]
+        C3[GRID]
+        C4[Emergency Stop]
+    end
+
+    subgraph S4[4A. Control Manual]
+        direction TB
+        M1[Joystick throttle / steering]
+        M2[Rate-limit input joystick]
+        M3[Kirim ke WebSocket untuk backend]
+        M4[Kirim MQTT joystick]
+    end
+
+    subgraph S5[4B. Control Grid / Route]
+        direction TB
+        G1[Tap peta untuk waypoint]
+        G2{Minimal 2 waypoint, GPS fix, telemetry aktif?}
+        G3[Tampilkan pesan validasi]
+        G4[EXECUTE route]
+        G5[Stop route aktif bila ada]
+        G6[Create draft route di backend]
+        G7[Start route di backend]
+        G8[Backend publish MQTT route]
+    end
+
+    subgraph S6[5. Firmware dan Kapal]
+        direction TB
+        D1[ESP32 baca command MQTT]
+        D2{Jenis command?}
+        D3[Manual: kontrol motor dan servo]
+        D4[Grid: validasi GPS dan waypoint]
+        D5[Autopilot menuju waypoint]
+        D6[Stop: throttle 0 dan steering 0]
+        D7[GPS / dead reckoning / obstacle / sensor kapal]
+        D8[Publish status MQTT]
+    end
+
+    subgraph S7[6. Monitoring Aplikasi]
+        direction TB
+        T1[Backend simpan telemetry]
+        T2[Aplikasi polling /telemetry tiap 2 detik]
+        T3[Normalisasi data telemetry]
+        T4[Update UI: peta, speed, heading, GPS, obstacle, GSM]
+        T5[Tampilkan route event: route_start, wp_reached, route_complete, route_reject, route_stop]
+    end
+
+    START --> A1 --> A2 --> A3 --> A4 --> A5
+    A5 --> B1 --> B2 --> B3 --> B4 --> B5
+    B5 -- Tidak --> B6 --> END
+    B5 -- Ya --> C1
+
+    C1 -- MANUAL --> C2 --> M1 --> M2 --> M3 --> M4 --> D1
+    C1 -- GRID --> C3 --> G1 --> G2
+    C1 -- STOP --> C4 --> D6
+
+    G2 -- Tidak --> G3
+    G2 -- Ya --> G4 --> G5 --> G6 --> G7 --> G8 --> D1
+
+    D1 --> D2
+    D2 -- Joystick --> D3
+    D2 -- Route --> D4
+    D4 -- Valid --> D5
+    D4 -- Reject --> D8
+    D2 -- Stop --> D6
+    D3 --> D7
+    D5 --> D7
+    D6 --> D7
+    D7 --> D8
+    D8 --> T1 --> T2 --> T3 --> T4 --> T5
+
+    classDef startup fill:#f8fafc,stroke:#475569,stroke-width:2px,color:#0f172a
+    classDef conn fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#0f172a
+    classDef mode fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#0f172a
+    classDef manual fill:#e8f3ff,stroke:#2563eb,stroke-width:2px,color:#0f172a
+    classDef grid fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,color:#0f172a
+    classDef device fill:#fefce8,stroke:#ca8a04,stroke-width:2px,color:#0f172a
+    classDef monitor fill:#f0fdfa,stroke:#0f766e,stroke-width:2px,color:#0f172a
+    classDef reject fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#0f172a
+    classDef done fill:#ffffff,stroke:#0f172a,stroke-width:2px,color:#0f172a
+
+    class A1,A2,A3,A4,A5 startup
+    class B1,B2,B3,B4,B5 conn
+    class B6,G3 reject
+    class C1,C2,C3,C4 mode
+    class M1,M2,M3,M4 manual
+    class G1,G2,G4,G5,G6,G7,G8 grid
+    class D1,D2,D3,D4,D5,D6,D7,D8 device
+    class T1,T2,T3,T4,T5 monitor
+    class START,END done

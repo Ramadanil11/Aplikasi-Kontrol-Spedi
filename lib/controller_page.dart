@@ -2,11 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'grid_control_page.dart';
-import 'services/session_service.dart';
 import 'services/websocket_service.dart';
 import 'services/mqtt_device_service.dart';
 import 'services/database_telemetry_service.dart';
-import 'core/api_exception.dart';
+import 'services/app_connection_service.dart';
+import 'services/grid_route_state_service.dart';
 
 class ShipControllerPage extends StatefulWidget {
   final String username;
@@ -16,12 +16,13 @@ class ShipControllerPage extends StatefulWidget {
   State<ShipControllerPage> createState() => _ShipControllerPageState();
 }
 
-class _ShipControllerPageState extends State<ShipControllerPage> {
+class _ShipControllerPageState extends State<ShipControllerPage>
+    with WidgetsBindingObserver {
   double throttleValue = 0.0;
   double steeringValue = 0.0;
   bool isConnected = false;
   double speed = 0.0;
-  int heading = 0;       // 0 = lurus utara, dari Arduino
+  int heading = 0; // 0 = lurus utara, dari Arduino
   double latitude = 0.0;
   double longitude = 0.0;
   int satellites = 0;
@@ -34,25 +35,28 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
   // ✅ Throttle joystick update rate untuk cegah servo oscillation
   DateTime _lastJoystickSend = DateTime.now();
 
-  // ── Telemetri v15.0-S3 (GSM + Sensor Fusion) ──────────────────────────
-  bool   _gsmConnected   = false;
-  int    _signalQuality  = 0;
-  int    _fusionMode     = 0;
+  // Telemetri v15.0-S3 (WiFi + Sensor Fusion)
+  bool _wifiConnected = false;
+  int _wifiSignal = 0;
+  int _fusionMode = 0;
 
   // Singleton services — tetap hidup saat pindah halaman
-  final _sessionService = SessionService.instance;
   final _wsService = WebSocketService.instance;
   final _mqttDevice = MqttDeviceService.instance;
   final _dbTelemetry = DatabaseTelemetryService.instance;
+  final _connectionService = AppConnectionService.instance;
+  final _gridRouteState = GridRouteStateService.instance;
 
   StreamSubscription<WsConnectionState>? _wsStateSub;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initServices();
     _wsStateSub = _wsService.stateStream.listen((state) {
-      if (mounted) setState(() => isConnected = state == WsConnectionState.connected);
+      if (mounted)
+        setState(() => isConnected = state == WsConnectionState.connected);
     });
     // Sinkronkan state awal WebSocket
     isConnected = _wsService.state == WsConnectionState.connected;
@@ -62,8 +66,19 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
 
   /// ✅ SIMPLIFIKASI TOTAL - Langsung buka session & connect!
   Future<void> _initServices() async {
-    await _openSessionAndConnect();
-    _onTelemetryUpdate();
+    try {
+      await _connectionService.ensureConnected(source: 'manual');
+      _onTelemetryUpdate();
+    } catch (e) {
+      debugPrint('[MANUAL] reconnect failed: $e');
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_initServices());
+    }
   }
 
   void _onTelemetryUpdate() {
@@ -73,62 +88,31 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
     final hasValidLocation = lat != 0.0 || lng != 0.0;
     setState(() {
       if (hasValidLocation) {
-        latitude     = lat;
-        longitude    = lng;
+        latitude = lat;
+        longitude = lng;
       }
-      speed          = _dbTelemetry.arduinoSpeed;
-      heading        = _dbTelemetry.lastHeading.round();
-      satellites     = _dbTelemetry.satelliteCount;
-      _gpsFixed      = _dbTelemetry.gpsFix;
-      _gpsQuality    = _dbTelemetry.gpsQuality;
-      _hdop          = _dbTelemetry.arduinoHdop;
-      _obstacleLeft  = _dbTelemetry.obstacleLeft;
+      speed = _dbTelemetry.arduinoSpeed;
+      heading = _dbTelemetry.lastHeading.round();
+      satellites = _dbTelemetry.satelliteCount;
+      _gpsFixed = _dbTelemetry.gpsFix;
+      _gpsQuality = _dbTelemetry.gpsQuality;
+      _hdop = _dbTelemetry.arduinoHdop;
+      _obstacleLeft = _dbTelemetry.obstacleLeft;
       _obstacleRight = _dbTelemetry.obstacleRight;
-      _gsmConnected  = _dbTelemetry.gsmConnected;
-      _signalQuality = _dbTelemetry.signalQuality;
-      _fusionMode    = _dbTelemetry.fusionMode;
+      _wifiConnected =
+          _dbTelemetry.wifiConnected ||
+          _mqttDevice.wifiConnected ||
+          _mqttDevice.isRunning;
+      _wifiSignal = _dbTelemetry.wifiSignal != 0
+          ? _dbTelemetry.wifiSignal
+          : _mqttDevice.wifiSignal;
+      _fusionMode = _dbTelemetry.fusionMode;
     });
-  }
-
-  Future<void> _openSessionAndConnect() async {
-    try {
-      const deviceId = 'cfead5c1-4e4e-42da-af88-70620b8e3eac';
-      debugPrint('[MANUAL] 1. Membuka session untuk device: $deviceId');
-      final session = await _sessionService.openSession(deviceId);
-      debugPrint('[MANUAL] 2. ✅ Session berhasil: ${session.sessionId}');
-      
-      debugPrint('[MANUAL] 3. Mencoba connect WebSocket...');
-      await _wsService.connect();
-      debugPrint('[MANUAL] 4. ✅ WebSocket connect selesai (cek state)');
-      
-      debugPrint('[MANUAL] 5. Starting database telemetry...');
-      _dbTelemetry.start(deviceId: deviceId);
-
-      debugPrint('[MANUAL] 6. Starting MQTT control path...');
-      _mqttDevice.startAsync();
-      debugPrint('[MANUAL] 6. ✅ Semua service started!');
-    } on ApiException catch (e) {
-      debugPrint('[MANUAL] ❌ ApiException: ${e.message}');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.statusCode == 409 ? 'Device sedang dipakai!' : e.message),
-          backgroundColor: Colors.red,
-        ));
-      }
-    } catch (e, stackTrace) {
-      debugPrint('[MANUAL] ❌ Exception: $e');
-      debugPrint('[MANUAL] StackTrace: $stackTrace');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Gagal konek ke device: $e'),
-          backgroundColor: Colors.red,
-        ));
-      }
-    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _dbTelemetry.telemetryNotifier.removeListener(_onTelemetryUpdate);
     _wsStateSub?.cancel();
     // JANGAN disconnect/dispose services di sini!
@@ -174,24 +158,30 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
         children: [
           const Icon(Icons.anchor, color: Color(0xFF22D3EE), size: 20),
           const SizedBox(width: 6),
-          const Text('SPEDI',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFFE0F2FE),
-                  letterSpacing: 2)),
+          const Text(
+            'SPEDI',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFFE0F2FE),
+              letterSpacing: 2,
+            ),
+          ),
           const SizedBox(width: 12),
           _buildModeBtn('MANUAL', true, () {}),
           const SizedBox(width: 6),
           _buildModeBtn('GRID', false, () {
-            Navigator.of(context).pushReplacement(MaterialPageRoute(
-              builder: (_) => GridControlPage(username: widget.username),
-            ));
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => GridControlPage(username: widget.username),
+              ),
+            );
           }),
           const Spacer(),
           // Status dot
           Container(
-            width: 8, height: 8,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
               color: isConnected ? Colors.green : Colors.red,
               shape: BoxShape.circle,
@@ -200,28 +190,41 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
           const SizedBox(width: 4),
           const Icon(Icons.radio, color: Color(0xFF22D3EE), size: 14),
           const SizedBox(width: 8),
-          Text('N $heading°',
-              style: const TextStyle(color: Color(0xFF67E8F9), fontSize: 11)),
+          Text(
+            'N $heading°',
+            style: const TextStyle(color: Color(0xFF67E8F9), fontSize: 11),
+          ),
           const SizedBox(width: 8),
           // User
-          Row(children: [
-            const Icon(Icons.person, size: 13, color: Color(0xFF22D3EE)),
-            const SizedBox(width: 4),
-            Text(widget.username,
-                style: const TextStyle(color: Color(0xFF67E8F9), fontSize: 11)),
-          ]),
+          Row(
+            children: [
+              const Icon(Icons.person, size: 13, color: Color(0xFF22D3EE)),
+              const SizedBox(width: 4),
+              Text(
+                widget.username,
+                style: const TextStyle(color: Color(0xFF67E8F9), fontSize: 11),
+              ),
+            ],
+          ),
           const SizedBox(width: 8),
           // Emergency Stop
           GestureDetector(
             onTap: () {
-              setState(() { throttleValue = 0; steeringValue = 0; speed = 0; });
+              setState(() {
+                throttleValue = 0;
+                steeringValue = 0;
+                speed = 0;
+              });
+              _gridRouteState.clear();
               _wsService.sendStop();
               _mqttDevice.sendJoystick(0, 0);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('EMERGENCY STOP'),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 2),
-              ));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('EMERGENCY STOP'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 2),
+                ),
+              );
             },
             child: Container(
               padding: const EdgeInsets.all(6),
@@ -230,7 +233,11 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(color: const Color(0xFFEF4444), width: 1.5),
               ),
-              child: const Icon(Icons.power_settings_new, color: Colors.white, size: 16),
+              child: const Icon(
+                Icons.power_settings_new,
+                color: Colors.white,
+                size: 16,
+              ),
             ),
           ),
         ],
@@ -244,20 +251,28 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 12),
         decoration: BoxDecoration(
-          color: isActive ? const Color(0xFF06B6D4).withOpacity(0.25) : Colors.black.withOpacity(0.3),
+          color: isActive
+              ? const Color(0xFF06B6D4).withOpacity(0.25)
+              : Colors.black.withOpacity(0.3),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-            color: isActive ? const Color(0xFF22D3EE) : const Color(0xFF06B6D4).withOpacity(0.3),
+            color: isActive
+                ? const Color(0xFF22D3EE)
+                : const Color(0xFF06B6D4).withOpacity(0.3),
             width: isActive ? 1.5 : 1,
           ),
         ),
-        child: Text(label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: isActive ? const Color(0xFF22D3EE) : const Color(0xFF67E8F9).withOpacity(0.5),
-              letterSpacing: 1,
-            )),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: isActive
+                ? const Color(0xFF22D3EE)
+                : const Color(0xFF67E8F9).withOpacity(0.5),
+            letterSpacing: 1,
+          ),
+        ),
       ),
     );
   }
@@ -281,7 +296,10 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.4),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF06B6D4).withOpacity(0.4), width: 1.5),
+        border: Border.all(
+          color: const Color(0xFF06B6D4).withOpacity(0.4),
+          width: 1.5,
+        ),
       ),
       child: Column(
         children: [
@@ -291,117 +309,195 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Row(children: [
-                  Icon(Icons.map, color: Color(0xFF22D3EE), size: 14),
-                  SizedBox(width: 6),
-                  Text('GPS TRACKING',
-                      style: TextStyle(color: Color(0xFF22D3EE), fontSize: 11,
-                          fontWeight: FontWeight.bold, letterSpacing: 1)),
-                ]),
-                Row(children: [
-                  Container(
-                    width: 7, height: 7,
-                    decoration: BoxDecoration(
-                      color: !_dbTelemetry.isRunning ? Colors.red
-                           : _gpsQuality >= 3 ? Colors.green
-                           : _gpsQuality >= 2 ? Colors.yellow
-                           : Colors.orange,
-                      shape: BoxShape.circle,
+                const Row(
+                  children: [
+                    Icon(Icons.map, color: Color(0xFF22D3EE), size: 14),
+                    SizedBox(width: 6),
+                    Text(
+                      'GPS TRACKING',
+                      style: TextStyle(
+                        color: Color(0xFF22D3EE),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    !_dbTelemetry.isRunning ? 'DB OFFLINE'
-                    : !_gpsFixed ? 'NO FIX'
-                    : '$satellites SAT Q$_gpsQuality',
-                    style: TextStyle(
-                      color: !_dbTelemetry.isRunning ? Colors.red
-                           : _gpsFixed ? Colors.green : Colors.orange,
-                      fontSize: 10, fontWeight: FontWeight.bold,
+                  ],
+                ),
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: !_dbTelemetry.isRunning
+                            ? Colors.red
+                            : _gpsQuality >= 3
+                            ? Colors.green
+                            : _gpsQuality >= 2
+                            ? Colors.yellow
+                            : Colors.orange,
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                  ),
-                ]),
+                    const SizedBox(width: 4),
+                    Text(
+                      !_dbTelemetry.isRunning
+                          ? 'DB OFFLINE'
+                          : !_gpsFixed
+                          ? 'NO FIX'
+                          : '$satellites SAT Q$_gpsQuality',
+                      style: TextStyle(
+                        color: !_dbTelemetry.isRunning
+                            ? Colors.red
+                            : _gpsFixed
+                            ? Colors.green
+                            : Colors.orange,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
           // Radar area + obstacle visualization
           Expanded(
-            child: LayoutBuilder(builder: (ctx, constraints) {
-              return Stack(
-                children: [
-                  Positioned.fill(child: CustomPaint(painter: GridPainter())),
-                  Center(child: CustomPaint(
-                    painter: RadarPainter(),
-                    size: Size(constraints.maxWidth * 0.7, constraints.maxHeight * 0.9),
-                  )),
-                  // Obstacle arcs — kiri dan kanan kapal
-                  Center(child: CustomPaint(
-                    painter: ObstaclePainter(
-                      leftDist: _obstacleLeft,
-                      rightDist: _obstacleRight,
-                      headingDeg: heading.toDouble(),
-                    ),
-                    size: Size(constraints.maxWidth * 0.7, constraints.maxHeight * 0.9),
-                  )),
-                  // Ikon kapal
-                  Center(
-                    child: Transform.rotate(
-                      angle: heading * math.pi / 180,
-                      child: const Icon(Icons.navigation, color: Color(0xFF22D3EE), size: 32,
-                          shadows: [Shadow(color: Color(0xFF06B6D4), blurRadius: 12)]),
-                    ),
-                  ),
-                  // Label obstacle kiri
-                  Positioned(
-                    left: 8, top: 8,
-                    child: _buildObstacleLabel('L', _obstacleLeft),
-                  ),
-                  // Label obstacle kanan
-                  Positioned(
-                    right: 8, top: 8,
-                    child: _buildObstacleLabel('R', _obstacleRight),
-                  ),
-                  // Koordinat
-                  Positioned(
-                    bottom: 6, left: 6, right: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(4),
+            child: LayoutBuilder(
+              builder: (ctx, constraints) {
+                final radarSide = math.min(
+                  constraints.maxWidth * 0.72,
+                  constraints.maxHeight * 0.86,
+                );
+                return ClipRect(
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: CustomPaint(painter: GridPainter()),
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          Text('LAT: ${latitude.toStringAsFixed(4)}',
-                              style: const TextStyle(color: Color(0xFF67E8F9), fontSize: 10, fontFamily: 'monospace')),
-                          Text('LNG: ${longitude.toStringAsFixed(4)}',
-                              style: const TextStyle(color: Color(0xFF67E8F9), fontSize: 10, fontFamily: 'monospace')),
-                        ],
+                      Center(
+                        child: CustomPaint(
+                          painter: RadarPainter(),
+                          size: Size.square(radarSide),
+                        ),
                       ),
-                    ),
+                      // Obstacle arcs — kiri dan kanan kapal
+                      Center(
+                        child: CustomPaint(
+                          painter: ObstaclePainter(
+                            leftDist: _obstacleLeft,
+                            rightDist: _obstacleRight,
+                            headingDeg: heading.toDouble(),
+                          ),
+                          size: Size.square(radarSide),
+                        ),
+                      ),
+                      // Ikon kapal
+                      Center(
+                        child: Transform.rotate(
+                          angle: heading * math.pi / 180,
+                          child: const Icon(
+                            Icons.navigation,
+                            color: Color(0xFF22D3EE),
+                            size: 32,
+                            shadows: [
+                              Shadow(color: Color(0xFF06B6D4), blurRadius: 12),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Label obstacle kiri
+                      Positioned(
+                        left: 8,
+                        top: 8,
+                        child: _buildObstacleLabel('L', _obstacleLeft),
+                      ),
+                      // Label obstacle kanan
+                      Positioned(
+                        right: 8,
+                        top: 8,
+                        child: _buildObstacleLabel('R', _obstacleRight),
+                      ),
+                      // Koordinat
+                      Positioned(
+                        bottom: 6,
+                        left: 6,
+                        right: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.7),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              Text(
+                                'LAT: ${latitude.toStringAsFixed(4)}',
+                                style: const TextStyle(
+                                  color: Color(0xFF67E8F9),
+                                  fontSize: 10,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                              Text(
+                                'LNG: ${longitude.toStringAsFixed(4)}',
+                                style: const TextStyle(
+                                  color: Color(0xFF67E8F9),
+                                  fontSize: 10,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              );
-            }),
+                );
+              },
+            ),
           ),
           // Status bar bawah
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: const Color(0xFF06B6D4).withOpacity(0.2))),
+              border: Border(
+                top: BorderSide(
+                  color: const Color(0xFF06B6D4).withOpacity(0.2),
+                ),
+              ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 _buildStatChip('SPEED', '${speed.toStringAsFixed(1)} km/h'),
                 _buildStatChip('HEADING', '$heading°'),
-                _buildStatChip('HDOP', _hdop < 90 ? _hdop.toStringAsFixed(1) : '--'),
+                _buildStatChip(
+                  'HDOP',
+                  _hdop < 90 ? _hdop.toStringAsFixed(1) : '--',
+                ),
                 _buildStatChip('LAT', latitude.toStringAsFixed(5)),
                 _buildStatChip('LNG', longitude.toStringAsFixed(5)),
-                _buildStatChip('GSM', _gsmConnected ? 'ON' : 'OFF'),
-                _buildStatChip('SIG', '$_signalQuality/31'),
-                _buildStatChip('IMU', _fusionMode == 2 ? 'FUSED' : _fusionMode == 3 ? 'DR' : _fusionMode == 1 ? 'CALIB' : 'INIT'),
+                _buildStatChip('WIFI', _wifiConnected ? 'ON' : 'OFF'),
+                _buildStatChip(
+                  'RSSI',
+                  _wifiSignal == 0 ? '--' : '$_wifiSignal',
+                ),
+                _buildStatChip(
+                  'IMU',
+                  _fusionMode == 2
+                      ? 'FUSED'
+                      : _fusionMode == 3
+                      ? 'DR'
+                      : _fusionMode == 1
+                      ? 'CALIB'
+                      : 'INIT',
+                ),
               ],
             ),
           ),
@@ -428,7 +524,12 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
       ),
       child: Text(
         '$side: ${dist}cm',
-        style: TextStyle(color: c, fontSize: 9, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+        style: TextStyle(
+          color: c,
+          fontSize: 9,
+          fontWeight: FontWeight.bold,
+          fontFamily: 'monospace',
+        ),
       ),
     );
   }
@@ -436,8 +537,22 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
   Widget _buildStatChip(String label, String value) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Color(0xFF22D3EE), fontSize: 9, fontWeight: FontWeight.w600)),
-        Text(value, style: const TextStyle(color: Color(0xFF67E8F9), fontSize: 13, fontWeight: FontWeight.bold)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF22D3EE),
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Color(0xFF67E8F9),
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ],
     );
   }
@@ -446,34 +561,56 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Text('THROTTLE',
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                color: Color(0xFF67E8F9), letterSpacing: 1)),
+        const Text(
+          'THROTTLE',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF67E8F9),
+            letterSpacing: 1,
+          ),
+        ),
         const SizedBox(height: 6),
         JoystickWidget(
           size: 130,
           isVertical: true,
           value: throttleValue,
           onChanged: (v) {
-            setState(() { throttleValue = v; speed = v.abs() * 25 / 100; });
-            
+            setState(() {
+              throttleValue = v;
+              speed = v.abs() * 25 / 100;
+            });
+
             // ✅ Throttle: kirim max 20x per detik (50ms interval) untuk cegah servo oscillation
-            if (DateTime.now().difference(_lastJoystickSend).inMilliseconds < 50) {
+            if (DateTime.now().difference(_lastJoystickSend).inMilliseconds <
+                50) {
               return;
             }
             _lastJoystickSend = DateTime.now();
-            
+
             // Kirim ke WebSocket (untuk backend)
-            _wsService.sendJoystick(throttle: throttleValue.toInt(), steering: steeringValue.toInt());
+            _wsService.sendJoystick(
+              throttle: throttleValue.toInt(),
+              steering: steeringValue.toInt(),
+            );
             // Kirim langsung ke MQTT (untuk Arduino)
-            _mqttDevice.sendJoystick(throttleValue.toInt(), steeringValue.toInt());
+            _mqttDevice.sendJoystick(
+              throttleValue.toInt(),
+              steeringValue.toInt(),
+            );
           },
           icon: Icons.waves,
         ),
         const SizedBox(height: 6),
-        Text('${throttleValue > 0 ? '+' : ''}${throttleValue.toInt()}%',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold,
-                color: Color(0xFF67E8F9), fontFamily: 'monospace')),
+        Text(
+          '${throttleValue > 0 ? '+' : ''}${throttleValue.toInt()}%',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF67E8F9),
+            fontFamily: 'monospace',
+          ),
+        ),
       ],
     );
   }
@@ -482,34 +619,55 @@ class _ShipControllerPageState extends State<ShipControllerPage> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Text('STEERING',
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                color: Color(0xFF67E8F9), letterSpacing: 1)),
+        const Text(
+          'STEERING',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF67E8F9),
+            letterSpacing: 1,
+          ),
+        ),
         const SizedBox(height: 6),
         JoystickWidget(
           size: 130,
           isVertical: false,
           value: steeringValue,
           onChanged: (v) {
-            setState(() { steeringValue = v; });
-            
+            setState(() {
+              steeringValue = v;
+            });
+
             // ✅ Throttle: kirim max 20x per detik (50ms interval) untuk cegah servo oscillation
-            if (DateTime.now().difference(_lastJoystickSend).inMilliseconds < 50) {
+            if (DateTime.now().difference(_lastJoystickSend).inMilliseconds <
+                50) {
               return;
             }
             _lastJoystickSend = DateTime.now();
-            
+
             // Kirim ke WebSocket (untuk backend)
-            _wsService.sendJoystick(throttle: throttleValue.toInt(), steering: steeringValue.toInt());
+            _wsService.sendJoystick(
+              throttle: throttleValue.toInt(),
+              steering: steeringValue.toInt(),
+            );
             // Kirim langsung ke MQTT (untuk Arduino)
-            _mqttDevice.sendJoystick(throttleValue.toInt(), steeringValue.toInt());
+            _mqttDevice.sendJoystick(
+              throttleValue.toInt(),
+              steeringValue.toInt(),
+            );
           },
           icon: Icons.navigation,
         ),
         const SizedBox(height: 6),
-        Text('${steeringValue > 0 ? '+' : ''}${steeringValue.toInt()}%',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold,
-                color: Color(0xFF67E8F9), fontFamily: 'monospace')),
+        Text(
+          '${steeringValue > 0 ? '+' : ''}${steeringValue.toInt()}%',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF67E8F9),
+            fontFamily: 'monospace',
+          ),
+        ),
       ],
     );
   }
@@ -529,6 +687,7 @@ class GridPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
     }
   }
+
   @override
   bool shouldRepaint(covariant CustomPainter o) => false;
 }
@@ -538,12 +697,16 @@ class RadarPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final paint = Paint()..style = PaintingStyle.stroke..strokeWidth = 1.5;
+    final maxRadius = math.min(size.width, size.height) / 2;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
     for (int i = 1; i <= 3; i++) {
       paint.color = const Color(0xFF06B6D4).withOpacity(0.3 - (i * 0.08));
-      canvas.drawCircle(center, (size.width / 6) * i, paint);
+      canvas.drawCircle(center, (maxRadius / 3) * i, paint);
     }
   }
+
   @override
   bool shouldRepaint(covariant CustomPainter o) => false;
 }
@@ -566,7 +729,7 @@ class ObstaclePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final maxR = size.width / 2;
+    final maxR = math.min(size.width, size.height) * 0.46;
 
     // Rotasi canvas sesuai heading kapal
     canvas.save();
@@ -574,13 +737,19 @@ class ObstaclePainter extends CustomPainter {
     canvas.rotate(headingDeg * math.pi / 180.0);
     canvas.translate(-center.dx, -center.dy);
 
-    _drawObstacleArc(canvas, center, maxR, leftDist, true);   // kiri
-    _drawObstacleArc(canvas, center, maxR, rightDist, false);  // kanan
+    _drawObstacleArc(canvas, center, maxR, leftDist, true); // kiri
+    _drawObstacleArc(canvas, center, maxR, rightDist, false); // kanan
 
     canvas.restore();
   }
 
-  void _drawObstacleArc(Canvas canvas, Offset center, double maxR, int dist, bool isLeft) {
+  void _drawObstacleArc(
+    Canvas canvas,
+    Offset center,
+    double maxR,
+    int dist,
+    bool isLeft,
+  ) {
     if (dist >= 400) return; // tidak ada halangan terdeteksi
 
     // Hitung intensitas: semakin dekat, semakin kuat
@@ -622,7 +791,7 @@ class ObstaclePainter extends CustomPainter {
     if (isLeft) {
       startAngle = -150.0 * math.pi / 180.0; // kiri atas
     } else {
-      startAngle = 90.0 * math.pi / 180.0;   // kanan bawah... no
+      startAngle = 90.0 * math.pi / 180.0; // kanan bawah... no
     }
 
     // Pakai koordinat dari atas: kiri = -90° ± 30°, kanan = +90° ± 30°
@@ -702,32 +871,69 @@ class _JoystickWidgetState extends State<JoystickWidget> {
             end: Alignment.bottomRight,
             colors: [Color(0xFF0f172a), Color(0xFF1e293b)],
           ),
-          border: Border.all(color: const Color(0xFF06B6D4).withOpacity(0.4), width: 2.5),
-          boxShadow: [BoxShadow(
-            color: const Color(0xFF164e63).withOpacity(0.5),
-            blurRadius: 15, spreadRadius: 2,
-          )],
+          border: Border.all(
+            color: const Color(0xFF06B6D4).withOpacity(0.4),
+            width: 2.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF164e63).withOpacity(0.5),
+              blurRadius: 15,
+              spreadRadius: 2,
+            ),
+          ],
         ),
         child: Stack(
           children: [
             if (widget.isVertical) ...[
-              const Positioned(top: 8, left: 0, right: 0,
-                  child: Icon(Icons.arrow_upward, color: Color(0xFF22D3EE), size: 16)),
-              Positioned(bottom: 8, left: 0, right: 0,
-                  child: Icon(Icons.arrow_downward,
-                      color: const Color(0xFF22D3EE).withOpacity(0.5), size: 16)),
+              const Positioned(
+                top: 8,
+                left: 0,
+                right: 0,
+                child: Icon(
+                  Icons.arrow_upward,
+                  color: Color(0xFF22D3EE),
+                  size: 16,
+                ),
+              ),
+              Positioned(
+                bottom: 8,
+                left: 0,
+                right: 0,
+                child: Icon(
+                  Icons.arrow_downward,
+                  color: const Color(0xFF22D3EE).withOpacity(0.5),
+                  size: 16,
+                ),
+              ),
             ] else ...[
-              Positioned(left: 8, top: 0, bottom: 0,
-                  child: Icon(Icons.arrow_back,
-                      color: const Color(0xFF22D3EE).withOpacity(0.5), size: 16)),
-              const Positioned(right: 8, top: 0, bottom: 0,
-                  child: Icon(Icons.arrow_forward, color: Color(0xFF22D3EE), size: 16)),
+              Positioned(
+                left: 8,
+                top: 0,
+                bottom: 0,
+                child: Icon(
+                  Icons.arrow_back,
+                  color: const Color(0xFF22D3EE).withOpacity(0.5),
+                  size: 16,
+                ),
+              ),
+              const Positioned(
+                right: 8,
+                top: 0,
+                bottom: 0,
+                child: Icon(
+                  Icons.arrow_forward,
+                  color: Color(0xFF22D3EE),
+                  size: 16,
+                ),
+              ),
             ],
             Center(
               child: Transform.translate(
                 offset: _knobOffset(),
                 child: Container(
-                  width: 46, height: 46,
+                  width: 46,
+                  height: 46,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: const LinearGradient(
@@ -735,11 +941,17 @@ class _JoystickWidgetState extends State<JoystickWidget> {
                       end: Alignment.bottomRight,
                       colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)],
                     ),
-                    border: Border.all(color: const Color(0xFF67E8F9), width: 2),
-                    boxShadow: [BoxShadow(
-                      color: const Color(0xFF06B6D4).withOpacity(0.6),
-                      blurRadius: 10, spreadRadius: 1,
-                    )],
+                    border: Border.all(
+                      color: const Color(0xFF67E8F9),
+                      width: 2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF06B6D4).withOpacity(0.6),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
                   ),
                   child: Icon(widget.icon, color: Colors.white, size: 20),
                 ),
