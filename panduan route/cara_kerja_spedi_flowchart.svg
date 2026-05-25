@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L8,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .lane-title { font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 700; fill: #0f172a; }
+      .node-text { font-family: Arial, Helvetica, sans-serif; font-size: 16px; fill: #0f172a; text-anchor: middle; dominant-baseline: middle; }
+      .label { font-family: Arial, Helvetica, sans-serif; font-size: 14px; fill: #334155; }
+      .panel { fill: #ffffff; stroke: #1e293b; stroke-width: 2; }
+      .lane-line { stroke: #cbd5e1; stroke-width: 1.4; }
+      .flow { fill: none; stroke: #334155; stroke-width: 2.3; marker-end: url(#arrow); }
+      .app { fill: #e0f2fe; stroke: #0284c7; stroke-width: 2; }
+      .backend { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; }
+      .firmware { fill: #fef3c7; stroke: #d97706; stroke-width: 2; }
+      .monitor { fill: #f0fdfa; stroke: #0f766e; stroke-width: 2; }
+      .decision { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
+      .warn { fill: #fee2e2; stroke: #dc2626; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="820" fill="#ffffff"/>
+  <rect x="40" y="30" width="1320" height="830" class="panel"/>
+
+  <line x1="40" y1="78" x2="1360" y2="78" class="lane-line"/>
+  <line x1="350" y1="30" x2="350" y2="860" class="lane-line"/>
+  <line x1="680" y1="30" x2="680" y2="860" class="lane-line"/>
+  <line x1="1010" y1="30" x2="1010" y2="860" class="lane-line"/>
+
+  <text x="195" y="61" class="lane-title" text-anchor="middle">Pengguna / Aplikasi Flutter</text>
+  <text x="515" y="61" class="lane-title" text-anchor="middle">Backend / API / MQTT</text>
+  <text x="845" y="61" class="lane-title" text-anchor="middle">Firmware Kapal</text>
+  <text x="1185" y="61" class="lane-title" text-anchor="middle">Monitoring Aplikasi</text>
+
+  <rect x="90" y="105" width="210" height="52" rx="7" class="app"/>
+  <text x="195" y="124" class="node-text">Aplikasi dibuka</text>
+  <text x="195" y="144" class="node-text">dan auto-login</text>
+
+  <rect x="410" y="105" width="210" height="52" rx="7" class="backend"/>
+  <text x="515" y="124" class="node-text">Buka session</text>
+  <text x="515" y="144" class="node-text">device SPEDI</text>
+
+  <rect x="410" y="185" width="210" height="52" rx="7" class="backend"/>
+  <text x="515" y="204" class="node-text">Connect WebSocket,</text>
+  <text x="515" y="224" class="node-text">MQTT, telemetry</text>
+
+  <polygon points="515,275 615,330 515,385 415,330" class="decision"/>
+  <text x="515" y="320" class="node-text">Koneksi</text>
+  <text x="515" y="340" class="node-text">siap?</text>
+
+  <rect x="410" y="420" width="210" height="52" rx="7" class="warn"/>
+  <text x="515" y="439" class="node-text">Tampilkan error</text>
+  <text x="515" y="459" class="node-text">koneksi</text>
+
+  <polygon points="195,275 295,330 195,385 95,330" class="decision"/>
+  <text x="195" y="320" class="node-text">Operator</text>
+  <text x="195" y="340" class="node-text">pilih mode?</text>
+
+  <rect x="80" y="480" width="230" height="52" rx="7" class="app"/>
+  <text x="195" y="506" class="node-text">Mode MANUAL</text>
+
+  <rect x="410" y="480" width="230" height="52" rx="7" class="backend"/>
+  <text x="525" y="499" class="node-text">Kirim joystick</text>
+  <text x="525" y="519" class="node-text">throttle / steering</text>
+
+  <rect x="735" y="480" width="230" height="52" rx="7" class="firmware"/>
+  <text x="850" y="499" class="node-text">ESP32 baca</text>
+  <text x="850" y="519" class="node-text">command joystick</text>
+
+  <rect x="735" y="555" width="230" height="52" rx="7" class="firmware"/>
+  <text x="850" y="574" class="node-text">Motor dan servo</text>
+  <text x="850" y="594" class="node-text">bergerak</text>
+
+  <rect x="1070" y="555" width="240" height="52" rx="7" class="monitor"/>
+  <text x="1190" y="574" class="node-text">UI update speed,</text>
+  <text x="1190" y="594" class="node-text">heading, GPS</text>
+
+  <rect x="80" y="620" width="230" height="52" rx="7" class="app"/>
+  <text x="195" y="646" class="node-text">Mode GRID / ROUTE</text>
+
+  <polygon points="525,600 630,646 525,692 420,646" class="decision"/>
+  <text x="525" y="636" class="node-text">GPS lock dan</text>
+  <text x="525" y="656" class="node-text">koordinat valid?</text>
+
+  <rect x="410" y="715" width="230" height="52" rx="7" class="warn"/>
+  <text x="525" y="734" class="node-text">Notif: GPS belum siap</text>
+  <text x="525" y="754" class="node-text">tunggu GPS fix valid</text>
+
+  <rect x="735" y="620" width="230" height="52" rx="7" class="backend"/>
+  <text x="850" y="639" class="node-text">Validasi waypoint,</text>
+  <text x="850" y="659" class="node-text">create dan start route</text>
+
+  <polygon points="850,695 940,735 850,775 760,735" class="decision"/>
+  <text x="850" y="725" class="node-text">Route</text>
+  <text x="850" y="745" class="node-text">valid?</text>
+
+  <rect x="1070" y="710" width="240" height="52" rx="7" class="monitor"/>
+  <text x="1190" y="729" class="node-text">UI tampilkan</text>
+  <text x="1190" y="749" class="node-text">route event/status</text>
+
+  <rect x="80" y="805" width="230" height="42" rx="7" class="warn"/>
+  <text x="195" y="826" class="node-text">Emergency Stop</text>
+
+  <rect x="410" y="805" width="230" height="42" rx="7" class="warn"/>
+  <text x="525" y="826" class="node-text">Kirim command stop</text>
+
+  <rect x="735" y="805" width="230" height="42" rx="7" class="warn"/>
+  <text x="850" y="826" class="node-text">Throttle 0 dan steering 0</text>
+
+  <rect x="1070" y="805" width="240" height="42" rx="7" class="monitor"/>
+  <text x="1190" y="826" class="node-text">UI tampilkan status stop</text>
+
+  <path d="M300 131 L410 131" class="flow"/>
+  <path d="M515 157 L515 185" class="flow"/>
+  <path d="M515 237 L515 275" class="flow"/>
+  <path d="M415 330 L295 330" class="flow"/>
+  <text x="346" y="312" class="label">Ya</text>
+  <path d="M515 385 L515 420" class="flow"/>
+  <text x="536" y="405" class="label">Tidak</text>
+
+  <path d="M195 385 L195 480" class="flow"/>
+  <path d="M195 385 L195 450 L60 450 L60 646 L80 646" class="flow"/>
+  <path d="M195 385 L195 465 L55 465 L55 826 L80 826" class="flow"/>
+
+  <path d="M310 506 L410 506" class="flow"/>
+  <path d="M640 506 L735 506" class="flow"/>
+  <path d="M850 532 L850 555" class="flow"/>
+  <path d="M965 581 L1070 581" class="flow"/>
+  <text x="992" y="559" class="label">status MQTT</text>
+
+  <path d="M310 646 L410 646" class="flow"/>
+  <path d="M630 646 L735 646" class="flow"/>
+  <text x="678" y="626" class="label">Ya</text>
+  <path d="M525 692 L525 715" class="flow"/>
+  <text x="552" y="699" class="label">Tidak</text>
+  <path d="M850 672 L850 695" class="flow"/>
+  <path d="M940 735 L1070 736" class="flow"/>
+  <text x="982" y="710" class="label">valid / reject</text>
+
+  <path d="M310 826 L410 826" class="flow"/>
+  <path d="M640 826 L735 826" class="flow"/>
+  <path d="M965 826 L1070 826" class="flow"/>
+</svg>

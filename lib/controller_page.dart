@@ -7,6 +7,7 @@ import 'services/mqtt_device_service.dart';
 import 'services/database_telemetry_service.dart';
 import 'services/app_connection_service.dart';
 import 'services/grid_route_state_service.dart';
+import 'widgets/app_notification.dart';
 
 class ShipControllerPage extends StatefulWidget {
   final String username;
@@ -218,12 +219,12 @@ class _ShipControllerPageState extends State<ShipControllerPage>
               _gridRouteState.clear();
               _wsService.sendStop();
               _mqttDevice.sendJoystick(0, 0);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('EMERGENCY STOP'),
-                  backgroundColor: Colors.red,
-                  duration: Duration(seconds: 2),
-                ),
+              showAppNotification(
+                context,
+                message: 'EMERGENCY STOP',
+                type: AppNotificationType.error,
+                icon: Icons.power_settings_new,
+                duration: const Duration(seconds: 2),
               );
             },
             child: Container(

@@ -157,12 +157,13 @@
 // ============================================================================
 // STATE MACHINE ENUMS
 // ============================================================================
-enum DeviceMode { MODE_IDLE, MODE_MANUAL, MODE_AUTO };
+enum DeviceMode { MODE_IDLE, MODE_MANUAL, MODE_AUTO, MODE_RTH };
 
 const char* modeToString(DeviceMode m) {
   switch (m) {
     case MODE_MANUAL: return "manual";
     case MODE_AUTO:   return "auto";
+    case MODE_RTH:    return "rth";
     default:          return "idle";
   }
 }
@@ -245,6 +246,11 @@ struct SystemState {
   bool          smartMoveActive   = false;
   bool          isAvoiding        = false;
   bool          autopilotActive   = false;
+  bool          rthActive         = false;
+  bool          homeSet           = false;
+  double        homeLat           = 0.0;
+  double        homeLng           = 0.0;
+  double        activeTargetDistM = 0.0;
   Waypoint      waypoints[MAX_WAYPOINTS];
   int           waypointCount     = 0;
   int           waypointIndex     = 0;
@@ -774,10 +780,12 @@ bool processAvoidance() {
 void handleJoystick(JsonDocument& doc) {
   if (S.smartMoveActive) return;
 
-  if (S.mode == MODE_AUTO) {
+  if (S.mode == MODE_AUTO || S.mode == MODE_RTH) {
     S.autopilotActive = false;
+    S.rthActive       = false;
     S.waypointCount   = 0;
     S.waypointIndex   = 0;
+    S.activeTargetDistM = 0.0;
     Serial.println("[NAV] Rute otonom dibatalkan — manual override");
   }
   S.mode        = MODE_MANUAL;
@@ -842,8 +850,13 @@ void handleRoute(JsonDocument& doc) {
       S.waypoints[i].lat = wps[i]["lat"] | 0.0;
       S.waypoints[i].lng = wps[i]["lng"] | 0.0;
     }
+    S.homeLat = S.filterInit ? S.filteredLat : gps.location.lat();
+    S.homeLng = S.filterInit ? S.filteredLng : gps.location.lng();
+    S.homeSet = true;
+    S.rthActive = false;
     S.waypointCount   = count;
     S.waypointIndex   = 0;
+    S.activeTargetDistM = 0.0;
     S.autopilotActive = true;
     S.steerIntegral   = 0.0;
     S.mode            = MODE_AUTO;
@@ -851,9 +864,11 @@ void handleRoute(JsonDocument& doc) {
 
   } else if (strcmp(action, "stop") == 0) {
     S.autopilotActive = false;
+    S.rthActive       = false;
     S.waypointCount   = 0;
     S.waypointIndex   = 0;
     S.targetSpeed     = 0;
+    S.activeTargetDistM = 0.0;
     S.steerIntegral   = 0.0;
     S.mode            = MODE_IDLE;
     setServoTarget(SERVO_CENTER);
@@ -867,12 +882,19 @@ void handleRoute(JsonDocument& doc) {
 void updateAutopilot() {
   if (!S.autopilotActive || S.waypointIndex >= S.waypointCount) {
     if (S.autopilotActive) {
+      bool completedRth = S.rthActive || S.mode == MODE_RTH;
       S.autopilotActive = false;
+      S.rthActive       = false;
       S.targetSpeed     = 0;
+      S.activeTargetDistM = 0.0;
       S.steerIntegral   = 0.0;
       S.mode            = MODE_IDLE;
       setServoTarget(SERVO_CENTER);
-      Serial.println("[NAV] Semua waypoint tercapai — rute selesai");
+      if (completedRth) {
+        Serial.println("[RTH] Titik awal tercapai — kapal berhenti total");
+      } else {
+        Serial.println("[NAV] Semua waypoint tercapai — rute selesai");
+      }
     }
     return;
   }
@@ -880,7 +902,13 @@ void updateAutopilot() {
   bool gpsFresh = gps.location.isValid() && gps.location.age() <= 2000;
   bool drValid  = S.drActive && S.filterInit;
 
-  if (!gpsFresh && !drValid) return;
+  if (!gpsFresh && !drValid) {
+    if (S.rthActive) {
+      S.targetSpeed = 0;
+      setServoTarget(SERVO_CENTER);
+    }
+    return;
+  }
 
   if (gpsFresh) {
     if (!acceptGpsPosition(gps.location.lat(), gps.location.lng())) return;
@@ -893,6 +921,7 @@ void updateAutopilot() {
 
   double dist    = haversineM(curLat, curLng, tgtLat, tgtLng);
   double bearing = bearingDeg(curLat, curLng, tgtLat, tgtLng);
+  S.activeTargetDistM = dist;
 
   double heading;
   if (gps.speed.isValid() && gps.speed.kmph() > 2.0 && gps.course.isValid()) {
@@ -905,8 +934,12 @@ void updateAutopilot() {
   if (dist < WP_ARRIVAL_RADIUS_M) {
     S.waypointIndex++;
     S.steerIntegral = 0.0;
-    Serial.printf("[NAV] WP %d tercapai (%.1fm). Next: %d/%d\n",
-      S.waypointIndex, dist, S.waypointIndex + 1, S.waypointCount);
+    if (S.rthActive) {
+      Serial.printf("[RTH] Home tercapai (%.1fm)\n", dist);
+    } else {
+      Serial.printf("[NAV] WP %d tercapai (%.1fm). Next: %d/%d\n",
+        S.waypointIndex, dist, S.waypointIndex + 1, S.waypointCount);
+    }
     return;
   }
 
@@ -932,6 +965,39 @@ void updateAutopilot() {
   else                           S.targetSpeed = WP_NAV_SPEED;
 }
 
+void startReturnToHome(const char* reason) {
+  if (S.rthActive) return;
+
+  if (!S.homeSet) {
+    S.autopilotActive = false;
+    S.rthActive       = false;
+    S.waypointCount   = 0;
+    S.waypointIndex   = 0;
+    S.targetSpeed     = 0;
+    S.activeTargetDistM = 0.0;
+    S.steerIntegral   = 0.0;
+    S.mode            = MODE_IDLE;
+    setServoTarget(SERVO_CENTER);
+    Serial.println(F("[RTH] Home belum tersedia — kapal berhenti total"));
+    beepAsync(150, 3);
+    return;
+  }
+
+  S.waypoints[0].lat = S.homeLat;
+  S.waypoints[0].lng = S.homeLng;
+  S.waypointCount    = 1;
+  S.waypointIndex    = 0;
+  S.autopilotActive  = true;
+  S.rthActive        = true;
+  S.targetSpeed      = 0;
+  S.activeTargetDistM = 0.0;
+  S.steerIntegral    = 0.0;
+  S.mode             = MODE_RTH;
+  Serial.printf("[RTH] Aktif (%s) — kembali ke %.8f, %.8f\n",
+    reason, S.homeLat, S.homeLng);
+  beepAsync(150, 3);
+}
+
 // ============================================================================
 // WIFI FAILSAFE
 // ============================================================================
@@ -942,7 +1008,9 @@ void updateWifiFailsafe() {
       Serial.println(F("[WIFI] Koneksi hilang — hitung mundur failsafe..."));
     }
     if (millis() - S.wifiLostAt > WIFI_FAILSAFE_MS) {
-      if (S.mode != MODE_AUTO && S.targetSpeed != 0) {
+      if (S.mode == MODE_AUTO) {
+        startReturnToHome("wifi_lost");
+      } else if (S.mode != MODE_RTH && S.targetSpeed != 0) {
         S.targetSpeed = 0;
         setMotorRaw(0);
         Serial.println(F("[SAFETY] WiFi Failsafe — Motor berhenti paksa!"));
@@ -993,11 +1061,17 @@ void publishTelemetry() {
   doc["lng"]               = gps.location.isValid() ? gps.location.lng() : 0.0;
   doc["satellite_count"]   = (int)gps.satellites.value();
   doc["waypoint_index"]    = S.waypointIndex;
+  doc["waypoint_count"]    = S.waypointCount;
   doc["mode"]              = modeToString(S.mode);
   doc["obstacle_left"]     = cachedDistLeft;
   doc["obstacle_right"]    = cachedDistRight;
   doc["smart_move_active"] = S.smartMoveActive;
   doc["autopilot_active"]  = S.autopilotActive;
+  doc["rth_active"]        = S.rthActive;
+  doc["home_set"]          = S.homeSet;
+  doc["home_lat"]          = S.homeLat;
+  doc["home_lng"]          = S.homeLng;
+  doc["wp_dist_m"]         = S.activeTargetDistM;
   doc["bearing"]           = gps.course.isValid() ? gps.course.deg() : 0.0;
   doc["speed"]             = gps.speed.isValid()  ? gps.speed.kmph() : 0.0;
   doc["hdop"]              = gps.hdop.isValid()   ? gps.hdop.hdop()  : 99.99;
@@ -1008,7 +1082,9 @@ void publishTelemetry() {
   doc["last_heading"]      = S.lastValidHeading;
   doc["servo_angle"]       = S.servoCurrentF;
   doc["dr_active"]         = S.drActive;
+  doc["dr_valid"]          = S.drActive;
   doc["imu_calib"]         = S.imuCalibStatus;
+  doc["wifi_connected"]    = WiFi.status() == WL_CONNECTED;
 
   size_t payloadSize = measureJson(doc);
   mqttClient.beginPublish(TOPIC_STATUS, payloadSize, false);
@@ -1133,6 +1209,7 @@ void loop() {
       processAvoidance();
       break;
     case MODE_AUTO:
+    case MODE_RTH:
       updateAutopilot();
       break;
     case MODE_IDLE:

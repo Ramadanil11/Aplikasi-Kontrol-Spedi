@@ -62,6 +62,10 @@ class DatabaseTelemetryService {
   bool wifiConnected = false;
   int wifiSignal = 0;
   int wifiRssi = 0;
+  bool rthActive = false;
+  bool homeSet = false;
+  double homeLat = 0.0;
+  double homeLng = 0.0;
   bool gsmConnected = false;
   int signalQuality = 0;
   double drHeading = 0.0;
@@ -168,6 +172,10 @@ class DatabaseTelemetryService {
     motorSpeed = _toInt(data['motor_speed'], 0);
     waypointIndex = _toInt(data['waypoint_index'], 0);
     autopilotActive = _toBool(data['autopilot_active'], false);
+    rthActive = _toBool(data['rth_active'], false) || deviceMode == 'rth';
+    homeSet = _toBool(data['home_set'], false);
+    homeLat = _toDouble(data['home_lat'], 0.0);
+    homeLng = _toDouble(data['home_lng'], 0.0);
     smartMoveActive = _toBool(data['smart_move_active'], false);
     obstacleLeft = _toInt(data['obstacle_left'], 400);
     obstacleRight = _toInt(data['obstacle_right'], 400);
@@ -240,6 +248,10 @@ class DatabaseTelemetryService {
       ..['wifi_signal'] = wifiSignal
       ..['wifi_rssi'] = wifiRssi
       ..['signal_quality'] = wifiSignal
+      ..['rth_active'] = rthActive
+      ..['home_set'] = homeSet
+      ..['home_lat'] = homeLat
+      ..['home_lng'] = homeLng
       ..['recorded_at'] = lastRecordedAt?.toIso8601String();
     telemetryNotifier.value = normalizedData;
 

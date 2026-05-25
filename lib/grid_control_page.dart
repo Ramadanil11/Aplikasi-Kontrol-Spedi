@@ -13,6 +13,7 @@ import 'services/database_telemetry_service.dart';
 import 'services/app_connection_service.dart';
 import 'services/grid_route_state_service.dart';
 import 'core/api_exception.dart';
+import 'widgets/app_notification.dart';
 
 class GridControlPage extends StatefulWidget {
   final String username;
@@ -58,6 +59,10 @@ class _GridControlPageState extends State<GridControlPage>
   // Telemetri baru dari Arduino v15.0-S3 (WiFi + M8U Sensor Fusion)
   bool _wifiConnected = false;
   int _wifiSignal = 0;
+  bool _rthActive = false;
+  bool _homeSet = false;
+  double _homeLat = 0.0;
+  double _homeLng = 0.0;
   double _drHeading = 0.0;
   double _drHeadingAcc = 999.0;
   bool _drValid = false;
@@ -241,6 +246,10 @@ class _GridControlPageState extends State<GridControlPage>
       _wifiSignal = _dbTelemetry.wifiSignal != 0
           ? _dbTelemetry.wifiSignal
           : _mqttDevice.wifiSignal;
+      _rthActive = _dbTelemetry.rthActive || _deviceMode == 'rth';
+      _homeSet = _dbTelemetry.homeSet;
+      _homeLat = _dbTelemetry.homeLat;
+      _homeLng = _dbTelemetry.homeLng;
       _drHeading = _dbTelemetry.drHeading;
       _drHeadingAcc = _dbTelemetry.drHeadingAcc;
       _drValid = _dbTelemetry.drValid;
@@ -313,25 +322,25 @@ class _GridControlPageState extends State<GridControlPage>
     if (!mounted || event == 'none') return;
 
     String message;
-    Color bgColor;
+    AppNotificationType type;
     IconData icon;
 
     switch (event) {
       case 'wp_reached':
         message =
             'WP ${wpIdx + 1}/$wpTotal tercapai (${dist.toStringAsFixed(1)}m)';
-        bgColor = const Color(0xFF10B981);
+        type = AppNotificationType.success;
         icon = Icons.check_circle;
         break;
       case 'wp_timeout':
         message = 'WP ${wpIdx + 1}/$wpTotal TIMEOUT — di-skip!';
-        bgColor = const Color(0xFFF59E0B);
+        type = AppNotificationType.warning;
         icon = Icons.timer_off;
         break;
       case 'route_complete':
         _clearSavedGridState();
         message = 'Rute selesai! Semua $wpTotal waypoint tercapai.';
-        bgColor = const Color(0xFF10B981);
+        type = AppNotificationType.success;
         icon = Icons.flag;
         setState(() {
           isExecuting = false;
@@ -341,7 +350,7 @@ class _GridControlPageState extends State<GridControlPage>
       case 'route_start':
         _clearRouteAckWait();
         message = 'Rute dimulai: $wpTotal waypoint';
-        bgColor = const Color(0xFF06B6D4);
+        type = AppNotificationType.info;
         icon = Icons.play_arrow;
         setState(() => isExecuting = true);
         _saveGridState();
@@ -349,7 +358,7 @@ class _GridControlPageState extends State<GridControlPage>
       case 'route_reject':
         _clearSavedGridState();
         message = _routeRejectMessage(reason);
-        bgColor = const Color(0xFFEF4444);
+        type = AppNotificationType.error;
         icon = Icons.error_outline;
         setState(() {
           isExecuting = false;
@@ -359,33 +368,45 @@ class _GridControlPageState extends State<GridControlPage>
       case 'route_stop':
         _clearSavedGridState();
         message = 'Rute dihentikan';
-        bgColor = const Color(0xFFEF4444);
+        type = AppNotificationType.error;
         icon = Icons.stop;
         setState(() {
           isExecuting = false;
           waypoints.clear();
         });
         break;
+      case 'rth_start':
+        message = 'Koneksi hilang, kapal kembali ke titik awal.';
+        type = AppNotificationType.warning;
+        icon = Icons.home_rounded;
+        break;
+      case 'rth_home_reached':
+      case 'rth_complete':
+        _clearSavedGridState();
+        message = 'RTH selesai, kapal berhenti di titik awal.';
+        type = AppNotificationType.success;
+        icon = Icons.home_rounded;
+        setState(() {
+          isExecuting = false;
+          waypoints.clear();
+        });
+        break;
+      case 'rth_reject':
+        message = 'RTH gagal: titik awal belum tersedia.';
+        type = AppNotificationType.error;
+        icon = Icons.home_rounded;
+        setState(() => isExecuting = false);
+        break;
       default:
         return; // event tidak dikenal, abaikan
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(icon, color: Colors.white, size: 16),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(message, style: const TextStyle(fontSize: 12)),
-            ),
-          ],
-        ),
-        backgroundColor: bgColor,
-        duration: const Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.only(bottom: 60, left: 200, right: 200),
-      ),
+    showAppNotification(
+      context,
+      message: message,
+      type: type,
+      icon: icon,
+      duration: const Duration(seconds: 3),
     );
   }
 
@@ -416,22 +437,18 @@ class _GridControlPageState extends State<GridControlPage>
       _mqttDevice.startAsync();
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              e.statusCode == 409 ? 'Device sedang dipakai!' : e.message,
-            ),
-            backgroundColor: Colors.red,
-          ),
+        showAppNotification(
+          context,
+          message: e.statusCode == 409 ? 'Device sedang dipakai!' : e.message,
+          type: AppNotificationType.error,
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Gagal konek ke device.'),
-            backgroundColor: Colors.red,
-          ),
+        showAppNotification(
+          context,
+          message: 'Gagal konek ke device.',
+          type: AppNotificationType.error,
         );
       }
     }
@@ -493,47 +510,39 @@ class _GridControlPageState extends State<GridControlPage>
         isExecuting = false;
       });
       _saveGridState();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Route tidak dikonfirmasi Arduino. Cek MQTT/GPS firmware.',
-          ),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 4),
-        ),
+      showAppNotification(
+        context,
+        message: 'Route tidak dikonfirmasi Arduino. Cek MQTT/GPS firmware.',
+        type: AppNotificationType.error,
+        duration: const Duration(seconds: 4),
       );
     });
   }
 
   Future<void> _executeRoute() async {
     if (waypoints.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Minimal 2 waypoint diperlukan.'),
-          backgroundColor: Colors.orange,
-        ),
+      showAppNotification(
+        context,
+        message: 'Minimal 2 waypoint diperlukan.',
+        type: AppNotificationType.warning,
       );
       return;
     }
     if (!_dbTelemetry.isRunning) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Database telemetry belum terhubung.'),
-          backgroundColor: Colors.red,
-        ),
+      showAppNotification(
+        context,
+        message: 'Database telemetry belum terhubung.',
+        type: AppNotificationType.error,
       );
       return;
     }
     if (!_gpsFix || !_locationLoaded) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _gpsFix
-                ? 'GPS fix ada, tapi koordinat kapal belum valid.'
-                : 'GPS belum siap untuk grid. Tunggu sampai GPS fix valid.',
-          ),
-          backgroundColor: Colors.orange,
-        ),
+      showAppNotification(
+        context,
+        message: _gpsFix
+            ? 'GPS fix ada, tapi koordinat kapal belum valid.'
+            : 'GPS belum siap untuk grid. Tunggu sampai GPS fix valid.',
+        type: AppNotificationType.warning,
       );
       return;
     }
@@ -543,14 +552,12 @@ class _GridControlPageState extends State<GridControlPage>
       await _startRouteViaBackend();
       _startRouteAckTimer();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Route dikirim via backend. Menunggu konfirmasi Arduino...',
-            ),
-            backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
-          ),
+        showAppNotification(
+          context,
+          message: 'Route dikirim via backend. Menunggu konfirmasi Arduino...',
+          type: AppNotificationType.success,
+          icon: Icons.route,
+          duration: const Duration(seconds: 2),
         );
       }
     } catch (e) {
@@ -558,12 +565,11 @@ class _GridControlPageState extends State<GridControlPage>
       if (mounted) {
         setState(() => isExecuting = false);
         _saveGridState();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Gagal start route: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
+        showAppNotification(
+          context,
+          message: 'Gagal start route: $e',
+          type: AppNotificationType.error,
+          duration: const Duration(seconds: 4),
         );
       }
     }
@@ -730,14 +736,18 @@ class _GridControlPageState extends State<GridControlPage>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: _deviceMode == 'auto'
+              color: _deviceMode == 'rth'
+                  ? const Color(0xFFEF4444).withOpacity(0.25)
+                  : _deviceMode == 'auto'
                   ? const Color(0xFF10B981).withOpacity(0.25)
                   : _deviceMode == 'manual'
                   ? const Color(0xFFF59E0B).withOpacity(0.25)
                   : Colors.black.withOpacity(0.3),
               borderRadius: BorderRadius.circular(4),
               border: Border.all(
-                color: _deviceMode == 'auto'
+                color: _deviceMode == 'rth'
+                    ? const Color(0xFFEF4444)
+                    : _deviceMode == 'auto'
                     ? const Color(0xFF10B981)
                     : _deviceMode == 'manual'
                     ? const Color(0xFFF59E0B)
@@ -750,7 +760,9 @@ class _GridControlPageState extends State<GridControlPage>
               style: TextStyle(
                 fontSize: 9,
                 fontWeight: FontWeight.bold,
-                color: _deviceMode == 'auto'
+                color: _deviceMode == 'rth'
+                    ? const Color(0xFFEF4444)
+                    : _deviceMode == 'auto'
                     ? const Color(0xFF10B981)
                     : _deviceMode == 'manual'
                     ? const Color(0xFFF59E0B)
@@ -795,14 +807,15 @@ class _GridControlPageState extends State<GridControlPage>
           GestureDetector(
             onTap: () async {
               await _stopRoute();
-              if (mounted)
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('EMERGENCY STOP'),
-                    backgroundColor: Colors.red,
-                    duration: Duration(seconds: 2),
-                  ),
+              if (mounted) {
+                showAppNotification(
+                  context,
+                  message: 'EMERGENCY STOP',
+                  type: AppNotificationType.error,
+                  icon: Icons.power_settings_new,
+                  duration: const Duration(seconds: 2),
                 );
+              }
             },
             child: Container(
               padding: const EdgeInsets.all(6),
@@ -946,6 +959,24 @@ class _GridControlPageState extends State<GridControlPage>
       );
     }
 
+    if (_homeSet && (_homeLat != 0.0 || _homeLng != 0.0)) {
+      markers.add(
+        Marker(
+          point: LatLng(_homeLat, _homeLng),
+          width: 34,
+          height: 34,
+          child: Icon(
+            Icons.home_rounded,
+            color: _rthActive
+                ? const Color(0xFFEF4444)
+                : const Color(0xFFF59E0B),
+            size: 28,
+            shadows: const [Shadow(color: Colors.black54, blurRadius: 6)],
+          ),
+        ),
+      );
+    }
+
     return markers;
   }
 
@@ -953,6 +984,16 @@ class _GridControlPageState extends State<GridControlPage>
   /// Saat autopilot aktif: segmen yang sudah dilewati ditampilkan abu-abu,
   /// segmen aktif ditampilkan hijau, segmen sisa ditampilkan cyan.
   List<Polyline> _buildPolylines() {
+    if (_rthActive && _homeSet && (_homeLat != 0.0 || _homeLng != 0.0)) {
+      return [
+        Polyline(
+          points: [_shipLatLng, LatLng(_homeLat, _homeLng)],
+          color: const Color(0xFFEF4444),
+          strokeWidth: 4,
+        ),
+      ];
+    }
+
     if (waypoints.isEmpty) return [];
 
     final polylines = <Polyline>[];
@@ -1143,6 +1184,14 @@ class _GridControlPageState extends State<GridControlPage>
                     _buildWarningChip(
                       Icons.power_off,
                       'MOTOR DISABLED (emergency stop)',
+                      Colors.red,
+                    ),
+                  ],
+                  if (_rthActive) ...[
+                    const SizedBox(height: 4),
+                    _buildWarningChip(
+                      Icons.home_rounded,
+                      'Koneksi hilang, kapal kembali ke titik awal',
                       Colors.red,
                     ),
                   ],
@@ -1586,12 +1635,18 @@ class _GridControlPageState extends State<GridControlPage>
               Expanded(
                 child: _tinyCell(
                   'WPT',
-                  _autopilotActive && _waypointCount > 0
+                  _rthActive
+                      ? 'HOME'
+                      : _autopilotActive && _waypointCount > 0
                       ? '${_waypointIndex + 1}/$_waypointCount'
                       : _autopilotActive
                       ? '${_waypointIndex + 1}/${waypoints.length}'
                       : '${waypoints.length}',
-                  color: _autopilotActive ? const Color(0xFF10B981) : null,
+                  color: _rthActive
+                      ? const Color(0xFFEF4444)
+                      : _autopilotActive
+                      ? const Color(0xFF10B981)
+                      : null,
                 ),
               ),
             ],
@@ -1627,14 +1682,20 @@ class _GridControlPageState extends State<GridControlPage>
               Expanded(
                 child: _tinyCell(
                   'DIST',
-                  _autopilotActive ? '${_wpDistM.toStringAsFixed(1)}m' : '--',
-                  color: _autopilotActive ? const Color(0xFF22D3EE) : null,
+                  (_autopilotActive || _rthActive)
+                      ? '${_wpDistM.toStringAsFixed(1)}m'
+                      : '--',
+                  color: _rthActive
+                      ? const Color(0xFFEF4444)
+                      : _autopilotActive
+                      ? const Color(0xFF22D3EE)
+                      : null,
                 ),
               ),
             ],
           ),
           // Row 4 (hanya saat autopilot): XTE | RADIUS | TIMEOUT
-          if (_autopilotActive) ...[
+          if (_autopilotActive || _rthActive) ...[
             const SizedBox(height: 4),
             Row(
               children: [
@@ -1835,6 +1896,9 @@ class _GridControlPageState extends State<GridControlPage>
     if (_waitingRouteAck) {
       statusLabel = 'WAIT ACK';
       statusColor = const Color(0xFF06B6D4);
+    } else if (_rthActive) {
+      statusLabel = 'RTH';
+      statusColor = const Color(0xFFEF4444);
     } else if (_autopilotActive) {
       if (_smartMoveActive) {
         statusLabel = 'AVOIDING';
@@ -1934,10 +1998,13 @@ class _GridControlPageState extends State<GridControlPage>
                     ),
                   ],
                 ),
-                if (_autopilotActive && waypoints.isNotEmpty) ...[
+                if (_rthActive ||
+                    (_autopilotActive && waypoints.isNotEmpty)) ...[
                   const SizedBox(height: 4),
                   Text(
-                    _waypointCount > 0
+                    _rthActive
+                        ? 'RETURN HOME'
+                        : _waypointCount > 0
                         ? 'WP ${_waypointIndex + 1}/$_waypointCount'
                         : 'WP ${_waypointIndex + 1}/${waypoints.length}',
                     style: const TextStyle(

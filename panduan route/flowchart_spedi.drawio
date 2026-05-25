@@ -1,0 +1,231 @@
+<mxfile host="app.diagrams.net" modified="2026-05-24T20:30:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="flowchart_spedi" name="Flowchart SPEDI">
+    <mxGraphModel dx="1600" dy="1500" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="Cara Kerja SPEDI - Flowchart dengan RTH" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=26;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="60" y="20" width="900" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="Versi baru: menambahkan Return To Home (RTH) dari fitur aplikasi/firmware tanpa menimpa file lama." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="60" y="55" width="900" height="24" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lane_app" value="Pengguna / Aplikasi Flutter" style="swimlane;html=1;startSize=50;rounded=1;arcSize=4;fillColor=#ffffff;strokeColor=#1e293b;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="40" y="95" width="340" height="1340" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_backend" value="Backend / API / MQTT" style="swimlane;html=1;startSize=50;rounded=0;fillColor=#ffffff;strokeColor=#cbd5e1;strokeWidth=1;fontSize=17;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="380" y="95" width="340" height="1340" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_fw" value="Firmware Kapal ESP32" style="swimlane;html=1;startSize=50;rounded=0;fillColor=#ffffff;strokeColor=#cbd5e1;strokeWidth=1;fontSize=17;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="720" y="95" width="400" height="1340" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_monitor" value="Monitoring Aplikasi" style="swimlane;html=1;startSize=50;rounded=1;arcSize=4;fillColor=#ffffff;strokeColor=#1e293b;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="95" width="440" height="1340" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="app_open" value="Aplikasi dibuka&lt;br&gt;dan auto-login" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#e0f2fe;strokeColor=#0284c7;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="90" y="170" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="session" value="Buka session&lt;br&gt;device SPEDI" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="430" y="170" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="connect" value="Connect WebSocket,&lt;br&gt;MQTT, telemetry" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="430" y="255" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="conn_ready" value="Koneksi&lt;br&gt;siap?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="445" y="350" width="210" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="error_conn" value="Tampilkan error&lt;br&gt;koneksi" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fee2e2;strokeColor=#dc2626;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="790" y="365" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="choose_mode" value="Operator&lt;br&gt;pilih mode?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="105" y="350" width="210" height="110" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="manual" value="Mode MANUAL" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#e0f2fe;strokeColor=#0284c7;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="90" y="510" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="joystick" value="Kirim joystick&lt;br&gt;throttle / steering" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="430" y="510" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="esp_joy" value="ESP32 baca&lt;br&gt;command joystick" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="790" y="510" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="motor_servo" value="Motor dan servo&lt;br&gt;bergerak" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="790" y="590" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="ui_speed" value="UI update speed,&lt;br&gt;heading, GPS" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f0fdfa;strokeColor=#0f766e;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="590" width="260" height="56" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="grid_route" value="Mode GRID / ROUTE" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#e0f2fe;strokeColor=#0284c7;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="90" y="685" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="gps_valid" value="GPS lock, koordinat,&lt;br&gt;waypoint &amp;gt;= 2?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="440" y="660" width="220" height="106" as="geometry"/>
+        </mxCell>
+        <mxCell id="validation_fail" value="Notif validasi gagal&lt;br&gt;GPS / waypoint belum siap" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fee2e2;strokeColor=#dc2626;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="430" y="805" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="create_route" value="Create route backend&lt;br&gt;dan start via MQTT" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#dcfce7;strokeColor=#16a34a;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="790" y="685" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="fw_validate" value="Firmware validasi route&lt;br&gt;simpan home point&lt;br&gt;mode AUTO + route_start" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="790" y="780" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="autopilot" value="Autopilot ke waypoint&lt;br&gt;PI steering, fuzzy speed,&lt;br&gt;obstacle avoidance" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="790" y="890" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ui_event" value="UI tampilkan event&lt;br&gt;route_start, wp_reached,&lt;br&gt;route_complete/reject" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f0fdfa;strokeColor=#0f766e;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="770" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="continue_auto" value="Lanjut&lt;br&gt;autopilot" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fef3c7;strokeColor=#d97706;strokeWidth=2;fontSize=13;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="1012" width="150" height="46" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="wifi_lost" value="WiFi hilang&lt;br&gt;&amp;gt; 5 detik saat&lt;br&gt;MODE_AUTO?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="800" y="980" width="240" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="home_ready" value="Home point&lt;br&gt;tersedia?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#ea580c;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="805" y="1115" width="230" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="rth_reject" value="RTH ditolak&lt;br&gt;home_not_set" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fee2e2;strokeColor=#dc2626;strokeWidth=2;fontSize=13;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="740" y="1245" width="175" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="wp_home" value="Waypoint home&lt;br&gt;mode RTH" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ede9fe;strokeColor=#7c3aed;strokeWidth=2;fontSize=13;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="935" y="1245" width="175" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="telemetry_rth" value="Telemetry RTH&lt;br&gt;mode=rth, rth_active,&lt;br&gt;home_set, home_lat/lng" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f0fdfa;strokeColor=#0f766e;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="1240" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="home_complete" value="Home tercapai&lt;br&gt;rth_complete + stop" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ede9fe;strokeColor=#7c3aed;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="1210" y="1330" width="260" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="emergency" value="Emergency Stop" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fee2e2;strokeColor=#dc2626;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1345" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="stop_cmd" value="Kirim command stop" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fee2e2;strokeColor=#dc2626;strokeWidth=2;fontSize=15;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="430" y="1345" width="240" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="idle" value="Throttle 0, steering center, mode IDLE" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#fee2e2;strokeColor=#dc2626;strokeWidth=2;fontSize=13;fontColor=#0f172a;" vertex="1" parent="1">
+          <mxGeometry x="790" y="1365" width="260" height="36" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="note" value="Catatan: home point dibuat saat route start berhasil. RTH otomatis aktif saat WiFi hilang ketika mode AUTO; jika home belum tersedia, firmware mengirim rth_reject." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1450" width="1450" height="35" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="app_open" target="session">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="session" target="connect">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="connect" target="conn_ready">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="Ya" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="conn_ready" target="choose_mode">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="Tidak" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="conn_ready" target="error_conn">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="choose_mode" target="manual">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="choose_mode" target="grid_route">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="60" y="405"/>
+              <mxPoint x="60" y="713"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="choose_mode" target="emergency">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="45" y="405"/>
+              <mxPoint x="45" y="1373"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="manual" target="joystick">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="joystick" target="esp_joy">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="esp_joy" target="motor_servo">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="status MQTT" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="motor_servo" target="ui_speed">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="grid_route" target="gps_valid">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" value="Ya" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="gps_valid" target="create_route">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e15" value="Tidak" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="gps_valid" target="validation_fail">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="create_route" target="fw_validate">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e17" value="event" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="fw_validate" target="ui_event">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="fw_validate" target="autopilot">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e19" value="monitor failsafe" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#64748b;dashed=1;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="autopilot" target="wifi_lost">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e20" value="Tidak" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#64748b;dashed=1;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="wifi_lost" target="continue_auto">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e21" value="Ya" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="wifi_lost" target="home_ready">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e22" value="Tidak" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="home_ready" target="rth_reject">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e23" value="Ya" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="home_ready" target="wp_home">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e24" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="wp_home" target="telemetry_rth">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e25" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="wp_home" target="home_complete">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e26" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#64748b;dashed=1;" edge="1" parent="1" source="rth_reject" target="idle">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e27" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#64748b;dashed=1;" edge="1" parent="1" source="home_complete" target="idle">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1340" y="1420"/>
+              <mxPoint x="920" y="1420"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="emergency" target="stop_cmd">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e29" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#334155;" edge="1" parent="1" source="stop_cmd" target="idle">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="725" y="1373"/>
+              <mxPoint x="725" y="1383"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
