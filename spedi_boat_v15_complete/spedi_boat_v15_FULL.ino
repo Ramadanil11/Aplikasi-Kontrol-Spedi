@@ -159,6 +159,8 @@
 // ============================================================================
 enum DeviceMode { MODE_IDLE, MODE_MANUAL, MODE_AUTO, MODE_RTH };
 
+void startReturnToHome(const char* reason);
+
 const char* modeToString(DeviceMode m) {
   switch (m) {
     case MODE_MANUAL: return "manual";
@@ -835,11 +837,11 @@ void handleJoystick(JsonDocument& doc) {
 // ROUTE
 // ============================================================================
 void handleRoute(JsonDocument& doc) {
-  if (!S.gpsLocked) return;
-
   const char* action = doc["action"] | "";
 
   if (strcmp(action, "start") == 0) {
+    if (!S.gpsLocked) return;
+
     JsonArray wps = doc["waypoints"];
     int count = min((int)wps.size(), MAX_WAYPOINTS);
     if (count < 2) {
@@ -861,6 +863,11 @@ void handleRoute(JsonDocument& doc) {
     S.steerIntegral   = 0.0;
     S.mode            = MODE_AUTO;
     Serial.printf("[NAV] Rute dimulai: %d waypoint\n", count);
+
+  } else if (strcmp(action, "rth") == 0 ||
+             strcmp(action, "return_home") == 0) {
+    const char* reason = doc["reason"] | "manual_button";
+    startReturnToHome(reason);
 
   } else if (strcmp(action, "stop") == 0) {
     S.autopilotActive = false;

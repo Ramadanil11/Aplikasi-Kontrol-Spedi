@@ -209,6 +209,8 @@
 // ============================================================================
 enum DeviceMode { MODE_IDLE, MODE_MANUAL, MODE_AUTO, MODE_RTH };
 
+void startReturnToHome(const char* reason);
+
 const char* modeToString(DeviceMode m) {
   switch (m) {
     case MODE_MANUAL: return "manual";
@@ -1205,6 +1207,11 @@ void handleRoute(JsonDocument& doc) {
     S.mode            = MODE_AUTO;
     Serial.printf("[NAV] Rute dimulai: %d waypoint | CARGO mode (kecepatan dibatasi)\n", count);
     setRouteEvent("route_start", nullptr, 0, count);
+
+  } else if (strcmp(action, "rth") == 0 ||
+             strcmp(action, "return_home") == 0) {
+    const char* reason = doc["reason"] | "manual_button";
+    startReturnToHome(reason);
 
   } else if (strcmp(action, "stop") == 0) {
     S.autopilotActive = false;

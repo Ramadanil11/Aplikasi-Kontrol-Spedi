@@ -111,6 +111,40 @@ class _ShipControllerPageState extends State<ShipControllerPage>
     });
   }
 
+  Future<void> _requestReturnToHome() async {
+    setState(() {
+      throttleValue = 0;
+      steeringValue = 0;
+      speed = 0;
+    });
+    _gridRouteState.clear();
+
+    try {
+      await _connectionService.ensureConnected(source: 'manual_rth');
+      final sent = _mqttDevice.requestReturnToHome();
+      if (!mounted) return;
+
+      showAppNotification(
+        context,
+        message: sent
+            ? 'RTH dikirim, kapal kembali ke titik awal.'
+            : 'RTH gagal dikirim. MQTT belum terhubung.',
+        type: sent ? AppNotificationType.warning : AppNotificationType.error,
+        icon: Icons.home_rounded,
+        duration: const Duration(seconds: 3),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showAppNotification(
+        context,
+        message: 'RTH gagal dikirim: $e',
+        type: AppNotificationType.error,
+        icon: Icons.home_rounded,
+        duration: const Duration(seconds: 4),
+      );
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -208,6 +242,24 @@ class _ShipControllerPageState extends State<ShipControllerPage>
             ],
           ),
           const SizedBox(width: 8),
+          // Return To Home
+          GestureDetector(
+            onTap: _requestReturnToHome,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFFBBF24), width: 1.5),
+              ),
+              child: const Icon(
+                Icons.home_rounded,
+                color: Colors.white,
+                size: 16,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
           // Emergency Stop
           GestureDetector(
             onTap: () {

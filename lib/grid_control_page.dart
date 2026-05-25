@@ -376,9 +376,18 @@ class _GridControlPageState extends State<GridControlPage>
         });
         break;
       case 'rth_start':
-        message = 'Koneksi hilang, kapal kembali ke titik awal.';
+        _clearRouteAckWait();
+        _clearSavedGridState();
+        message = reason == 'manual_button'
+            ? 'RTH darurat aktif, kapal kembali ke titik awal.'
+            : 'Koneksi hilang, kapal kembali ke titik awal.';
         type = AppNotificationType.warning;
         icon = Icons.home_rounded;
+        setState(() {
+          isExecuting = false;
+          waypoints.clear();
+          _activeRouteId = null;
+        });
         break;
       case 'rth_home_reached':
       case 'rth_complete':
@@ -646,6 +655,43 @@ class _GridControlPageState extends State<GridControlPage>
     _clearSavedGridState();
   }
 
+  Future<void> _requestReturnToHome() async {
+    _clearRouteAckWait();
+
+    try {
+      await _connectionService.ensureConnected(source: 'grid_rth');
+      final sent = _mqttDevice.requestReturnToHome();
+      if (!mounted) return;
+
+      if (sent) {
+        setState(() {
+          isExecuting = false;
+          _activeRouteId = null;
+        });
+        _clearSavedGridState();
+      }
+
+      showAppNotification(
+        context,
+        message: sent
+            ? 'RTH dikirim, kapal kembali ke titik awal.'
+            : 'RTH gagal dikirim. MQTT belum terhubung.',
+        type: sent ? AppNotificationType.warning : AppNotificationType.error,
+        icon: Icons.home_rounded,
+        duration: const Duration(seconds: 3),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showAppNotification(
+        context,
+        message: 'RTH gagal dikirim: $e',
+        type: AppNotificationType.error,
+        icon: Icons.home_rounded,
+        duration: const Duration(seconds: 4),
+      );
+    }
+  }
+
   int get totalSegments => waypoints.length;
 
   @override
@@ -804,6 +850,23 @@ class _GridControlPageState extends State<GridControlPage>
           const SizedBox(width: 4),
           const Icon(Icons.radio, color: Color(0xFF22D3EE), size: 14),
           const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _requestReturnToHome,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFFBBF24), width: 1.5),
+              ),
+              child: const Icon(
+                Icons.home_rounded,
+                color: Colors.white,
+                size: 16,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
           GestureDetector(
             onTap: () async {
               await _stopRoute();
