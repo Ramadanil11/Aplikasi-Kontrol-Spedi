@@ -466,7 +466,7 @@ class MqttDeviceService {
   }
 
   /// Kirim route command langsung ke Arduino via MQTT.
-  /// Payload format: {'action': 'start'|'stop'|'rth', 'waypoints': [{'lat': ..., 'lng': ...}]}
+  /// Payload format: {'action': 'start'|'stop'|'rth'|'set_home', 'waypoints': [{'lat': ..., 'lng': ...}]}
   void publishRoute(Map<String, dynamic> payload) {
     if (_client == null ||
         _client!.connectionStatus?.state != MqttConnectionState.connected) {
@@ -502,6 +502,16 @@ class MqttDeviceService {
       return false;
     }
     publishRoute({'action': 'rth', 'reason': reason});
+    return true;
+  }
+
+  bool resetHomeToCurrentPosition({String reason = 'manual_reset'}) {
+    if (_client == null ||
+        _client!.connectionStatus?.state != MqttConnectionState.connected) {
+      debugPrint('[MQTT] resetHomeToCurrentPosition skipped - not connected');
+      return false;
+    }
+    publishRoute({'action': 'set_home', 'reason': reason});
     return true;
   }
 

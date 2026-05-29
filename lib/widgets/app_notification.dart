@@ -12,6 +12,8 @@ void showAppNotification(
   AppNotificationType type = AppNotificationType.info,
   IconData? icon,
   Duration duration = const Duration(seconds: 3),
+  EdgeInsets margin = const EdgeInsets.only(left: 16, right: 16, bottom: 18),
+  double maxWidth = 520,
 }) {
   final overlay = Overlay.maybeOf(context, rootOverlay: true);
   if (overlay == null) return;
@@ -26,6 +28,8 @@ void showAppNotification(
       type: type,
       icon: icon,
       duration: duration,
+      margin: margin,
+      maxWidth: maxWidth,
       onDismissed: () {
         if (_activeNotification == entry) {
           _activeNotification = null;
@@ -44,6 +48,8 @@ class _AppNotificationOverlay extends StatefulWidget {
   final AppNotificationType type;
   final IconData? icon;
   final Duration duration;
+  final EdgeInsets margin;
+  final double maxWidth;
   final VoidCallback onDismissed;
 
   const _AppNotificationOverlay({
@@ -51,6 +57,8 @@ class _AppNotificationOverlay extends StatefulWidget {
     required this.type,
     required this.icon,
     required this.duration,
+    required this.margin,
+    required this.maxWidth,
     required this.onDismissed,
   });
 
@@ -77,7 +85,7 @@ class _AppNotificationOverlayState extends State<_AppNotificationOverlay>
     );
     _fade = CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic);
     _slide = Tween<Offset>(
-      begin: const Offset(0, -0.2),
+      begin: const Offset(0, 0.25),
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
 
@@ -107,21 +115,22 @@ class _AppNotificationOverlayState extends State<_AppNotificationOverlay>
     final icon = widget.icon ?? _defaultIcon(widget.type);
 
     return Positioned(
-      top: 52,
-      left: 16,
-      right: 16,
+      bottom: widget.margin.bottom,
+      left: widget.margin.left,
+      right: widget.margin.right,
       child: IgnorePointer(
         ignoring: false,
         child: SafeArea(
-          bottom: false,
+          top: false,
+          bottom: true,
           child: Align(
-            alignment: Alignment.topCenter,
+            alignment: Alignment.bottomCenter,
             child: SlideTransition(
               position: _slide,
               child: FadeTransition(
                 opacity: _fade,
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
+                  constraints: BoxConstraints(maxWidth: widget.maxWidth),
                   child: Material(
                     color: Colors.transparent,
                     child: Container(

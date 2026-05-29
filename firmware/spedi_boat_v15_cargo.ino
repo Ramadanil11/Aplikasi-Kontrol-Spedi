@@ -478,10 +478,26 @@ struct SystemState {
   float         fuzzySteerOut     = 0.0f;
 } S;
 
-#define FILTER_SAMPLES 5
-int leftBuf[FILTER_SAMPLES]  = {400,400,400,400,400};
-int rightBuf[FILTER_SAMPLES] = {400,400,400,400,400};
+#define FILTER_SAMPLES 7
+#define SONAR_MIN_CM 2
+#define SONAR_MAX_CM 400
+#define SONAR_MAX_STEP_CM 35
+#define SONAR_APPROACH_ALPHA 0.55f
+#define SONAR_RELEASE_ALPHA 0.22f
+#define SONAR_TIMEOUT_RELEASE_AFTER 3
+#define SONAR_TIMEOUT_RELEASE_STEP_CM 25
+
+int leftBuf[FILTER_SAMPLES]  = {400,400,400,400,400,400,400};
+int rightBuf[FILTER_SAMPLES] = {400,400,400,400,400,400,400};
 int bufIdx = 0;
+float leftFilteredDist  = 400.0f;
+float rightFilteredDist = 400.0f;
+int leftLastValidDist   = 400;
+int rightLastValidDist  = 400;
+bool leftFilterInit     = false;
+bool rightFilterInit    = false;
+uint8_t leftTimeoutCount  = 0;
+uint8_t rightTimeoutCount = 0;
 
 // ============================================================================
 // UTILITY
@@ -982,16 +998,67 @@ void setServoTarget(int angle) {
 // ============================================================================
 // ULTRASONIC (HC-SR04)
 // ============================================================================
-int readFilteredDist(int trig, int echo, int* buf) {
+int medianBufferValue(int* buf) {
+  int tmp[FILTER_SAMPLES];
+  for (int i = 0; i < FILTER_SAMPLES; i++) tmp[i] = buf[i];
+
+  for (int i = 1; i < FILTER_SAMPLES; i++) {
+    int key = tmp[i];
+    int j = i - 1;
+    while (j >= 0 && tmp[j] > key) {
+      tmp[j + 1] = tmp[j];
+      j--;
+    }
+    tmp[j + 1] = key;
+  }
+
+  return tmp[FILTER_SAMPLES / 2];
+}
+
+int readFilteredDist(
+  int trig,
+  int echo,
+  int* buf,
+  float& filteredDist,
+  int& lastValidDist,
+  bool& filterInit,
+  uint8_t& timeoutCount
+) {
   digitalWrite(trig, LOW);  delayMicroseconds(2);
   digitalWrite(trig, HIGH); delayMicroseconds(10);
   digitalWrite(trig, LOW);
+
   long dur = pulseIn(echo, HIGH, 25000);
-  int  raw = (dur == 0) ? 400 : (int)(dur * 0.017f);
+  int raw = lastValidDist;
+  if (dur > 0) {
+    raw = constrain((int)(dur * 0.017f), SONAR_MIN_CM, SONAR_MAX_CM);
+    lastValidDist = raw;
+    timeoutCount = 0;
+  } else {
+    if (timeoutCount < 255) timeoutCount++;
+    if (timeoutCount >= SONAR_TIMEOUT_RELEASE_AFTER) {
+      raw = min(lastValidDist + SONAR_TIMEOUT_RELEASE_STEP_CM, SONAR_MAX_CM);
+      lastValidDist = raw;
+    }
+  }
+
   buf[bufIdx] = raw;
-  long sum = 0;
-  for (int i = 0; i < FILTER_SAMPLES; i++) sum += buf[i];
-  return (int)(sum / FILTER_SAMPLES);
+  int median = medianBufferValue(buf);
+
+  if (!filterInit) {
+    filteredDist = (float)median;
+    filterInit = true;
+    return median;
+  }
+
+  float delta = (float)median - filteredDist;
+  delta = constrain(delta, -(float)SONAR_MAX_STEP_CM, (float)SONAR_MAX_STEP_CM);
+
+  float alpha = (delta < 0.0f) ? SONAR_APPROACH_ALPHA : SONAR_RELEASE_ALPHA;
+  filteredDist += delta * alpha;
+  filteredDist = constrain(filteredDist, (float)SONAR_MIN_CM, (float)SONAR_MAX_CM);
+
+  return (int)(filteredDist + 0.5f);
 }
 
 // ============================================================================
@@ -1005,8 +1072,24 @@ bool processAvoidance() {
   if (millis() - S.lastSonarRead < SONAR_INTERVAL) return S.isAvoiding;
   S.lastSonarRead = millis();
 
-  int dL = readFilteredDist(TRIG_LEFT_PIN,  ECHO_LEFT_PIN,  leftBuf);
-  int dR = readFilteredDist(TRIG_RIGHT_PIN, ECHO_RIGHT_PIN, rightBuf);
+  int dL = readFilteredDist(
+    TRIG_LEFT_PIN,
+    ECHO_LEFT_PIN,
+    leftBuf,
+    leftFilteredDist,
+    leftLastValidDist,
+    leftFilterInit,
+    leftTimeoutCount
+  );
+  int dR = readFilteredDist(
+    TRIG_RIGHT_PIN,
+    ECHO_RIGHT_PIN,
+    rightBuf,
+    rightFilteredDist,
+    rightLastValidDist,
+    rightFilterInit,
+    rightTimeoutCount
+  );
   bufIdx = (bufIdx + 1) % FILTER_SAMPLES;
 
   cachedDistLeft  = dL;
@@ -1212,6 +1295,49 @@ void handleRoute(JsonDocument& doc) {
              strcmp(action, "return_home") == 0) {
     const char* reason = doc["reason"] | "manual_button";
     startReturnToHome(reason);
+
+  } else if (strcmp(action, "set_home") == 0 ||
+             strcmp(action, "reset_home") == 0) {
+    const char* reason = doc["reason"] | "manual_reset";
+    bool gpsFresh = gps.location.isValid() && gps.location.age() <= 3000;
+    bool filteredValid = S.filterInit && isValidWaypoint(S.filteredLat, S.filteredLng);
+
+    if (!gpsFresh && !filteredValid) {
+      setRouteEvent("home_reset_reject", "gps_not_ready");
+      Serial.println("[RTH] Reset home ditolak - GPS/filtered position belum valid");
+      beepAsync(150, 2);
+      return;
+    }
+
+    double newHomeLat = filteredValid ? S.filteredLat : gps.location.lat();
+    double newHomeLng = filteredValid ? S.filteredLng : gps.location.lng();
+    if (!isValidWaypoint(newHomeLat, newHomeLng)) {
+      setRouteEvent("home_reset_reject", "invalid_coordinate");
+      Serial.printf("[RTH] Reset home ditolak - koordinat tidak valid: %.8f, %.8f\n",
+        newHomeLat, newHomeLng);
+      beepAsync(150, 2);
+      return;
+    }
+
+    S.autopilotActive = false;
+    S.rthActive       = false;
+    S.smartMoveActive = false;
+    S.isAvoiding      = false;
+    S.waypointCount   = 0;
+    S.waypointIndex   = 0;
+    S.targetSpeed     = 0;
+    S.activeTargetDistM = 0.0;
+    S.steerIntegral   = 0.0;
+    S.lastValidHeading = 0.0;
+    S.homeLat         = newHomeLat;
+    S.homeLng         = newHomeLng;
+    S.homeSet         = true;
+    S.mode            = MODE_IDLE;
+    setServoTarget(SERVO_CENTER);
+    setRouteEvent("home_reset", reason);
+    Serial.printf("[RTH] Home di-reset (%s) -> %.8f, %.8f\n",
+      reason, S.homeLat, S.homeLng);
+    beepAsync(100, 2);
 
   } else if (strcmp(action, "stop") == 0) {
     S.autopilotActive = false;

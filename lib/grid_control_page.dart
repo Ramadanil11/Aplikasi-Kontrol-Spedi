@@ -406,11 +406,27 @@ class _GridControlPageState extends State<GridControlPage>
         icon = Icons.home_rounded;
         setState(() => isExecuting = false);
         break;
+      case 'home_reset':
+        _clearSavedGridState();
+        message = 'Home baru tersimpan di posisi kapal sekarang.';
+        type = AppNotificationType.success;
+        icon = Icons.home_rounded;
+        setState(() {
+          isExecuting = false;
+          waypoints.clear();
+          _activeRouteId = null;
+        });
+        break;
+      case 'home_reset_reject':
+        message = 'Home gagal diganti: GPS kapal belum valid.';
+        type = AppNotificationType.warning;
+        icon = Icons.home_rounded;
+        break;
       default:
         return; // event tidak dikenal, abaikan
     }
 
-    showAppNotification(
+    _showGridNotification(
       context,
       message: message,
       type: type,
@@ -446,7 +462,7 @@ class _GridControlPageState extends State<GridControlPage>
       _mqttDevice.startAsync();
     } on ApiException catch (e) {
       if (mounted) {
-        showAppNotification(
+        _showGridNotification(
           context,
           message: e.statusCode == 409 ? 'Device sedang dipakai!' : e.message,
           type: AppNotificationType.error,
@@ -454,7 +470,7 @@ class _GridControlPageState extends State<GridControlPage>
       }
     } catch (e) {
       if (mounted) {
-        showAppNotification(
+        _showGridNotification(
           context,
           message: 'Gagal konek ke device.',
           type: AppNotificationType.error,
@@ -491,12 +507,43 @@ class _GridControlPageState extends State<GridControlPage>
     }
   }
 
-  void _clearAllWaypoints() {
+  Future<void> _clearAllWaypoints() async {
     _clearSavedGridState();
+    final hasCurrentPosition =
+        _locationLoaded &&
+        (_shipLatLng.latitude != 0.0 || _shipLatLng.longitude != 0.0);
+
     setState(() {
       waypoints.clear();
       isExecuting = false;
+      _activeRouteId = null;
+      if (hasCurrentPosition) {
+        _homeSet = true;
+        _homeLat = _shipLatLng.latitude;
+        _homeLng = _shipLatLng.longitude;
+      }
     });
+
+    var sent = false;
+    try {
+      await _connectionService.ensureConnected(source: 'grid_reset_home');
+      sent = _mqttDevice.resetHomeToCurrentPosition();
+    } catch (e) {
+      debugPrint('[GRID] Reset home command failed: $e');
+    }
+
+    if (!mounted) return;
+    _showGridNotification(
+      context,
+      message: sent
+          ? hasCurrentPosition
+                ? 'Waypoint direset. Home dipindah ke posisi kapal sekarang.'
+                : 'Waypoint direset. Menunggu GPS valid untuk update home.'
+          : 'Waypoint direset, tapi home firmware belum terganti. Cek MQTT.',
+      type: sent ? AppNotificationType.success : AppNotificationType.warning,
+      icon: Icons.home_rounded,
+      duration: const Duration(seconds: 3),
+    );
   }
 
   void _clearRouteAckWait({bool save = true}) {
@@ -519,7 +566,7 @@ class _GridControlPageState extends State<GridControlPage>
         isExecuting = false;
       });
       _saveGridState();
-      showAppNotification(
+      _showGridNotification(
         context,
         message: 'Route tidak dikonfirmasi Arduino. Cek MQTT/GPS firmware.',
         type: AppNotificationType.error,
@@ -530,7 +577,7 @@ class _GridControlPageState extends State<GridControlPage>
 
   Future<void> _executeRoute() async {
     if (waypoints.length < 2) {
-      showAppNotification(
+      _showGridNotification(
         context,
         message: 'Minimal 2 waypoint diperlukan.',
         type: AppNotificationType.warning,
@@ -538,7 +585,7 @@ class _GridControlPageState extends State<GridControlPage>
       return;
     }
     if (!_dbTelemetry.isRunning) {
-      showAppNotification(
+      _showGridNotification(
         context,
         message: 'Database telemetry belum terhubung.',
         type: AppNotificationType.error,
@@ -546,7 +593,7 @@ class _GridControlPageState extends State<GridControlPage>
       return;
     }
     if (!_gpsFix || !_locationLoaded) {
-      showAppNotification(
+      _showGridNotification(
         context,
         message: _gpsFix
             ? 'GPS fix ada, tapi koordinat kapal belum valid.'
@@ -561,7 +608,7 @@ class _GridControlPageState extends State<GridControlPage>
       await _startRouteViaBackend();
       _startRouteAckTimer();
       if (mounted) {
-        showAppNotification(
+        _showGridNotification(
           context,
           message: 'Route dikirim via backend. Menunggu konfirmasi Arduino...',
           type: AppNotificationType.success,
@@ -574,7 +621,7 @@ class _GridControlPageState extends State<GridControlPage>
       if (mounted) {
         setState(() => isExecuting = false);
         _saveGridState();
-        showAppNotification(
+        _showGridNotification(
           context,
           message: 'Gagal start route: $e',
           type: AppNotificationType.error,
@@ -671,7 +718,7 @@ class _GridControlPageState extends State<GridControlPage>
         _clearSavedGridState();
       }
 
-      showAppNotification(
+      _showGridNotification(
         context,
         message: sent
             ? 'RTH dikirim, kapal kembali ke titik awal.'
@@ -682,7 +729,7 @@ class _GridControlPageState extends State<GridControlPage>
       );
     } catch (e) {
       if (!mounted) return;
-      showAppNotification(
+      _showGridNotification(
         context,
         message: 'RTH gagal dikirim: $e',
         type: AppNotificationType.error,
@@ -693,6 +740,27 @@ class _GridControlPageState extends State<GridControlPage>
   }
 
   int get totalSegments => waypoints.length;
+
+  void _showGridNotification(
+    BuildContext context, {
+    required String message,
+    AppNotificationType type = AppNotificationType.info,
+    IconData? icon,
+    Duration duration = const Duration(seconds: 3),
+  }) {
+    final useMapBounds = MediaQuery.sizeOf(context).width >= 720;
+    showAppNotification(
+      context,
+      message: message,
+      type: type,
+      icon: icon,
+      duration: duration,
+      margin: useMapBounds
+          ? const EdgeInsets.only(left: 196, right: 136, bottom: 18)
+          : const EdgeInsets.only(left: 16, right: 16, bottom: 18),
+      maxWidth: useMapBounds ? 460 : 360,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -871,7 +939,7 @@ class _GridControlPageState extends State<GridControlPage>
             onTap: () async {
               await _stopRoute();
               if (mounted) {
-                showAppNotification(
+                _showGridNotification(
                   context,
                   message: 'EMERGENCY STOP',
                   type: AppNotificationType.error,
@@ -1207,6 +1275,10 @@ class _GridControlPageState extends State<GridControlPage>
                       ],
                     ),
                   ),
+                  if (waypoints.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    _buildWaypointCounterChip(),
+                  ],
                   // Notifikasi masalah — muncul di bawah GPS banner
                   if (!_mqttDevice.isRunning) ...[
                     const SizedBox(height: 4),
@@ -1387,45 +1459,6 @@ class _GridControlPageState extends State<GridControlPage>
                         ),
                       ],
                     ),
-                  ),
-                ),
-              ),
-
-            // Waypoint counter
-            if (waypoints.isNotEmpty)
-              Positioned(
-                bottom: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.7),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: const Color(0xFF22D3EE).withOpacity(0.4),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.place,
-                        color: Color(0xFFF59E0B),
-                        size: 12,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${waypoints.length} waypoint',
-                        style: const TextStyle(
-                          color: Color(0xFF67E8F9),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
                   ),
                 ),
               ),
@@ -1944,6 +1977,32 @@ class _GridControlPageState extends State<GridControlPage>
   }
 
   // ─── CONTROL PANEL ────────────────────────────────────────────────────────
+
+  Widget _buildWaypointCounterChip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.72),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: const Color(0xFF22D3EE).withOpacity(0.45)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.place, color: Color(0xFFF59E0B), size: 11),
+          const SizedBox(width: 4),
+          Text(
+            '${waypoints.length} waypoint',
+            style: const TextStyle(
+              color: Color(0xFF67E8F9),
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildControlPanel() {
     final canExecuteRoute =
